@@ -1,0 +1,14 @@
+numpy>=1.26,<2
+opencv-python-headless>=4.10
+pyarrow>=16
+PyYAML>=6
+# Runtime versions resolved by /share/project/lxy/openpi/uv.lock.
+av==17.0.0
+datasets==3.6.0
+huggingface-hub==0.32.3
+rerun-sdk==0.23.1
+torch==2.7.1
+torchcodec==0.4.0
+torchvision==0.22.1
+# Keep the dataset loader exactly aligned with /share/project/lxy/openpi/pyproject.toml.
+lerobot @ git+https://github.com/huggingface/lerobot.git@0cf864870cf29f4738d3ade893e6fd13fbd7cdb5
