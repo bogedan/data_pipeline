@@ -78,6 +78,8 @@ def main() -> None:
     if not episodes_path.exists():
         raise SystemExit(f"Missing {episodes_path}; run 01_convert_trajectories.py first")
     source_info = read_json(source / "meta/info.json")
+    if "robot_type" not in source_info:
+        raise ValueError(f"Source dataset metadata has no robot_type: {source / 'meta/info.json'}")
     episodes = read_jsonl(episodes_path)
     if bool(config.get("turn_sparsification", {}).get("enabled", False)):
         partial_name = "01_7_partial_episode_stats.jsonl"
@@ -145,7 +147,7 @@ def main() -> None:
     tasks = read_jsonl(output / "meta/tasks.jsonl")
     info = {
         "codebase_version": "v2.1",
-        "robot_type": config["output"]["robot_type"],
+        "robot_type": source_info["robot_type"],
         "total_episodes": len(episodes),
         "total_frames": total_frames,
         "total_tasks": len(tasks),

@@ -5,7 +5,6 @@ source:
 work_dir: /share/project/lxy/data_pipeline/work/test_20261003_155718_openpi_smooth_2
 output:
   root: /share/project/lxy/test_20261003_155718_openpi_smooth_2
-  robot_type: omniumix_single_arm
   chunks_size: 1000
   overwrite: true
 task:

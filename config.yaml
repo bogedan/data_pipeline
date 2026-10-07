@@ -6,11 +6,10 @@ source:
   camera_key: observation.images.mvs_DA9057815
 
 # Intermediate reports and partial statistics. Safe to delete after validation.
-work_dir: /share/project/lxy/data_pipeline/work/test_20261003_155718_openpi_smooth_2
+work_dir: /share/project/lxy/data_pipeline/work/test_20261003_155718_openpi_final
 
 output:
-  root: /share/project/lxy/test_20261003_155718_openpi_smooth_2
-  robot_type: omniumix_single_arm
+  root: /share/project/lxy/test_20261003_155718_openpi_final
   chunks_size: 1000
   # 01 only removes an existing output when it contains this pipeline's marker.
   overwrite: true
@@ -50,7 +49,7 @@ trajectory:
 # [start_frame, end_frame) slice to videos in stage 05.
 trim:
   enabled: true
-  position_threshold_m: 0.020
+  position_threshold_m: 0.030
   rotation_threshold_deg: 3.0
   gripper_threshold_rad: 0.1
   pre_roll_frames: 5
@@ -74,7 +73,7 @@ smoothing:
 # the conservative dense-turn filter to the remaining kept trajectory.
 turn_sparsification:
   enabled: true
-  prefix_frames: 50
+  prefix_frames: 60
   prefix_min_spacing_m: 0.001
   turn_angle_threshold_deg: 10.0
   turn_context_frames: 5

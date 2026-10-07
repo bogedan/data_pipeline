@@ -51,6 +51,8 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 - `visualization.point_radius_m`：TCP 点云中每个点的显示半径；
 - `visualization.path_radius_m`：使用 `--with-paths` 时轨迹线的显示半径。
 
+最终数据集的 `robot_type` 直接继承源数据 `meta/info.json`，不在流水线配置中重复填写。
+
 脚本不会根据文件名、字段名或 `mock` 等标记猜测位姿变换是否已经使用。当前数据已经在采集
 阶段应用了 tracker→TCP 变换，所以配置明确使用 `pose_transform.enabled: false`，直接使用
 `observation.state`。不能在转换阶段再次应用 `my_transform`，否则会形成重复变换。
