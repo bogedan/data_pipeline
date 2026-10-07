@@ -81,6 +81,8 @@ def main() -> None:
     if not marker_path.exists():
         raise SystemExit(f"Missing {marker_path}; run 01_convert_trajectories.py first")
     marker = read_json(marker_path)
+    if bool(config.get("smoothing", {}).get("enabled", False)) and marker.get("smoothing_status") != "complete":
+        raise SystemExit("Trimming requires a completed 02_smooth_trajectories.py stage")
     if marker.get("trim_status") in {"running", "complete"}:
         raise SystemExit(
             "This output has already entered the trim stage. Rerun 01_convert_trajectories.py "
@@ -99,6 +101,7 @@ def main() -> None:
         "pre_roll_frames": int(trim["pre_roll_frames"]),
         "post_roll_frames": int(trim["post_roll_frames"]),
         "min_episode_frames": int(trim.get("min_episode_frames", config["validation"]["action_horizon"])),
+        "min_active_frames": int(trim.get("min_active_frames", 1)),
     }
 
     # Validate every episode before changing any parquet. This ensures that a bad

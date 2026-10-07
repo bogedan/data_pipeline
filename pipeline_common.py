@@ -510,11 +510,14 @@ def find_static_trim_bounds(
     pre_roll_frames: int,
     post_roll_frames: int,
     min_episode_frames: int,
+    min_active_frames: int = 1,
 ) -> tuple[int, int, dict[str, float | int]]:
     """Find ``[start, end)`` after removing long initial/final pose plateaus.
 
-    The first active frame differs from the initial pose by at least one configured
-    threshold. The last active frame is found symmetrically against the final pose.
+    The first active frame begins a sustained run in which every frame differs
+    from the initial pose by at least one configured threshold. The last active
+    frame is found symmetrically against the final pose. Requiring a sustained
+    run prevents isolated tracking jitter from extending the retained interval.
     Small pre/post-roll regions are retained around those boundaries.
     """
     pose10 = np.asarray(pose10, dtype=np.float32)
@@ -526,6 +529,8 @@ def find_static_trim_bounds(
         raise ValueError("Trim thresholds must be non-negative")
     if min(pre_roll_frames, post_roll_frames) < 0:
         raise ValueError("pre_roll_frames and post_roll_frames must be non-negative")
+    if min_active_frames < 1:
+        raise ValueError("min_active_frames must be >= 1")
 
     rotations = pose10_rotation_matrix(pose10)
 
@@ -549,13 +554,26 @@ def find_static_trim_bounds(
         | (from_end[1] > rotation_threshold_deg)
         | (from_end[2] > gripper_threshold_rad)
     )
-    start_candidates = np.flatnonzero(active_from_start)
-    end_candidates = np.flatnonzero(active_from_end)
-    if len(start_candidates) == 0 or len(end_candidates) == 0:
-        raise ValueError("Episode never leaves its initial/final static plateau under the configured thresholds")
+    def sustained_runs(active: np.ndarray) -> np.ndarray:
+        if len(active) < min_active_frames:
+            return np.empty(0, dtype=np.int64)
+        counts = np.convolve(
+            active.astype(np.int32),
+            np.ones(min_active_frames, dtype=np.int32),
+            mode="valid",
+        )
+        return np.flatnonzero(counts == min_active_frames)
 
-    first_active = int(start_candidates[0])
-    last_active = int(end_candidates[-1])
+    start_runs = sustained_runs(active_from_start)
+    end_runs = sustained_runs(active_from_end)
+    if len(start_runs) == 0 or len(end_runs) == 0:
+        raise ValueError(
+            "Episode never leaves its initial/final static plateau for "
+            f"min_active_frames={min_active_frames} under the configured thresholds"
+        )
+
+    first_active = int(start_runs[0])
+    last_active = int(end_runs[-1] + min_active_frames - 1)
     start = max(0, first_active - pre_roll_frames)
     end = min(len(pose10), last_active + 1 + post_roll_frames)
     if end <= start:
@@ -582,6 +600,7 @@ def find_static_trim_bounds(
         "original_length": len(pose10),
         "first_active_frame": first_active,
         "last_active_frame": last_active,
+        "min_active_frames": min_active_frames,
         "start_frame": start,
         "end_frame": end,
         "trimmed_length": end - start,

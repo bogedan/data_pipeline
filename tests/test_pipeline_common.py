@@ -73,6 +73,31 @@ def test_find_static_trim_bounds_rejects_all_static_episode() -> None:
         raise AssertionError("Expected an all-static episode to be rejected")
 
 
+def test_find_static_trim_bounds_ignores_short_jitter_bursts() -> None:
+    pose = np.zeros((100, 10), dtype=np.float32)
+    pose[:, 3] = 1.0
+    pose[:, 7] = 1.0
+    pose[10, 0] = 0.006  # One-frame jitter relative to the initial plateau.
+    pose[30:70, 0] = 0.1
+    pose[70:, 0] = 0.2
+    pose[90, 0] = 0.194  # One-frame jitter relative to the final plateau.
+
+    start, end, details = find_static_trim_bounds(
+        pose,
+        position_threshold_m=0.005,
+        rotation_threshold_deg=3.0,
+        gripper_threshold_rad=0.1,
+        pre_roll_frames=0,
+        post_roll_frames=0,
+        min_episode_frames=32,
+        min_active_frames=5,
+    )
+
+    assert start == 30
+    assert end == 70
+    assert details["min_active_frames"] == 5
+
+
 def test_smooth_pose10_preserves_shape_endpoints_and_gripper() -> None:
     pose = np.zeros((21, 10), dtype=np.float32)
     pose[:, 3] = 1.0

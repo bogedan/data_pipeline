@@ -81,10 +81,10 @@ def main() -> None:
     episodes = read_jsonl(episodes_path)
     if bool(config.get("turn_sparsification", {}).get("enabled", False)):
         partial_name = "01_7_partial_episode_stats.jsonl"
-    elif bool(config.get("smoothing", {}).get("enabled", False)):
-        partial_name = "01_6_partial_episode_stats.jsonl"
     elif bool(config.get("trim", {}).get("enabled", False)):
         partial_name = "01_5_partial_episode_stats.jsonl"
+    elif bool(config.get("smoothing", {}).get("enabled", False)):
+        partial_name = "01_6_partial_episode_stats.jsonl"
     else:
         partial_name = "01_partial_episode_stats.jsonl"
     partial_path = work / partial_name

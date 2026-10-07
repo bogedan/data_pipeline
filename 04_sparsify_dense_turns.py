@@ -106,7 +106,9 @@ def main() -> None:
         raise SystemExit(f"Missing {marker_path}; run the trajectory stages first")
     marker = read_json(marker_path)
     if bool(config.get("smoothing", {}).get("enabled", False)) and marker.get("smoothing_status") != "complete":
-        raise SystemExit("Turn sparsification requires a completed 03_smooth_trajectories.py stage")
+        raise SystemExit("Turn sparsification requires a completed 02_smooth_trajectories.py stage")
+    if bool(config.get("trim", {}).get("enabled", False)) and marker.get("trim_status") != "complete":
+        raise SystemExit("Turn sparsification requires a completed 03_trim_static_segments.py stage")
     if marker.get("turn_sparsification_status") in {"running", "complete"}:
         raise SystemExit(
             "This output has already entered turn sparsification. Rerun 01_convert_trajectories.py "

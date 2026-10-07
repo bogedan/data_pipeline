@@ -114,8 +114,6 @@ def main() -> None:
     if not marker_path.exists():
         raise SystemExit(f"Missing {marker_path}; run the trajectory stages first")
     marker = read_json(marker_path)
-    if bool(config.get("trim", {}).get("enabled", False)) and marker.get("trim_status") != "complete":
-        raise SystemExit("Smoothing requires a completed 02_trim_static_segments.py stage")
     if marker.get("smoothing_status") in {"running", "complete"}:
         raise SystemExit(
             "This output has already entered smoothing. Rerun 01_convert_trajectories.py "
