@@ -30,12 +30,13 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 00_inspect_source.py          检查源 metadata、parquet、视频和外部程序
 01_convert_trajectories.py    quaternion -> column rot6d，width_m -> angle_rad，构造 action
 02_smooth_trajectories.py     平滑 TCP 平移和 SO(3) 旋转；不改帧数、不平滑夹爪
-03_trim_static_segments.py    在平滑轨迹上裁掉首尾长静止段，重建索引/action，并记录视频裁剪范围
-04_sparsify_dense_turns.py    只减少拐弯处空间距离过密的点；直线和夹爪变化帧不删
-05_convert_videos.py          选择主相机，中心裁剪并编码为 240x240 H.264
-06_finalize_metadata.py       生成 info、episodes_stats 和全局 stats
-07_validate_openpi.py         验证时序、rot6d、视频，并通过 LeRobot loader 读取 action chunk
-08_visualize_tcp_distribution.py  将全部 episode 的 TCP 点云写入一个 Rerun RRD
+03_limit_tcp_steps.py         用原始轨迹的可配置百分位数限制相邻 TCP 位移/旋转
+04_trim_static_segments.py    在处理后轨迹上裁掉首尾长静止段，重建索引/action
+05_sparsify_dense_turns.py    只减少拐弯处空间距离过密的点；直线和夹爪变化帧不删
+06_convert_videos.py          选择主相机，中心裁剪并编码为 240x240 H.264
+07_finalize_metadata.py       生成 info、episodes_stats 和全局 stats
+08_validate_openpi.py         验证时序、步长、rot6d、视频和 OpenPI action chunk
+09_visualize_tcp_distribution.py  将全部 episode 的 TCP 点云写入一个 Rerun RRD
 ```
 
 ## 使用
@@ -46,6 +47,9 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 - `trajectory.action_offset_frames`：state 与 action 的时间关系；
 - `trajectory.pose_transform.enabled`：是否额外应用一次固定的 tracker→TCP 变换，必须明确填 true/false；
 - `trajectory.gripper.calibration_file`：同时包含 `distance` 和 `width_to_rad` 的夹爪标定文件；
+- `smoothing.enabled`：是否在硬步长限制前执行局部轨迹平滑；
+- `step_limit.enabled`：是否限制相邻帧 TCP 位移和旋转；
+- `step_limit.percentile`：从未平滑的转换轨迹计算的百分位数，例如 90、95 或 99；
 - `task.prompt`：训练指令；
 - `output.root`：输出目录。
 - `visualization.point_radius_m`：TCP 点云中每个点的显示半径；
@@ -76,12 +80,13 @@ set -e
 python 00_inspect_source.py --config config.yaml
 python 01_convert_trajectories.py --config config.yaml
 python 02_smooth_trajectories.py --config config.yaml
-python 03_trim_static_segments.py --config config.yaml
-python 04_sparsify_dense_turns.py --config config.yaml
-python 05_convert_videos.py --config config.yaml
-python 06_finalize_metadata.py --config config.yaml
-python 07_validate_openpi.py --config config.yaml
-python 08_visualize_tcp_distribution.py --config config.yaml
+python 03_limit_tcp_steps.py --config config.yaml
+python 04_trim_static_segments.py --config config.yaml
+python 05_sparsify_dense_turns.py --config config.yaml
+python 06_convert_videos.py --config config.yaml
+python 07_finalize_metadata.py --config config.yaml
+python 08_validate_openpi.py --config config.yaml
+python 09_visualize_tcp_distribution.py --config config.yaml
 ```
 
 也可以使用脚本一次执行完整流水线：
@@ -97,12 +102,12 @@ cd /share/project/lxy/data_pipeline
 ./run_data_pipeline.sh config_smooth_then_trim.yaml
 ```
 
-`set -e` 会让任一步骤失败时立即停止，避免在缺少上一步产物时继续运行后续脚本。修复配置或
-脚本后，可以从失败的编号继续；不需要总是从 `00` 重跑。
+`set -e` 会让任一步骤失败时立即停止，避免在缺少上一步产物时继续运行后续脚本。若某阶段在开始改写
+episode 之前失败，可在修复后从该编号继续；若 marker 已显示 `running`，则应从 `01` 重建输出。
 
-`08` 只读取最终数据集，不修改 parquet 或视频。默认每个 episode 使用不同颜色绘制 TCP 点云，
+`09` 只读取最终数据集，不修改 parquet 或视频。默认每个 episode 使用不同颜色绘制 TCP 点云，
 白点表示起点、黑点表示终点；添加 `--with-paths` 可以同时绘制轨迹连线。输出位置为
-`work_dir/05_all_episode_tcp_pointcloud.rrd`。
+`work_dir/09_all_episode_tcp_pointcloud.rrd`。
 
 远程服务器没有 X server 时，可以直接使用 `data_pipeline` 环境中的 Rerun Web Viewer。当前
 RRD 使用 `rerun-sdk==0.23.1` 生成；该环境已经安装此版本。重建环境时可执行：
@@ -122,7 +127,7 @@ rerun --serve-web \
   --bind=0.0.0.0 \
   --web-viewer-port=9090 \
   --port=9876 \
-  /share/project/lxy/data_pipeline/work/test_20261003_155718_openpi_smooth_2/05_all_episode_tcp_pointcloud.rrd
+  /share/project/lxy/data_pipeline/work/test_20261003_155718_openpi_smooth_2/09_all_episode_tcp_pointcloud.rrd
 ```
 
 如果服务器端口没有直接开放，在本地执行 SSH 转发：
@@ -142,12 +147,25 @@ ssh -L 9090:localhost:9090 -L 9876:localhost:9876 用户名@服务器地址
 
 平滑后会从新的 `observation.state` 重新构造 shifted action，并写出：
 
-- `work_dir/01_6_smoothing_manifest.jsonl`：每个 episode 的位置/旋转改变量和 jerk；
-- `work_dir/01_6_smoothing_report.json`：全数据集汇总；
-- `work_dir/01_6_smoothing_comparison.rrd`：灰色原始轨迹、蓝色平滑轨迹和两者姿态坐标轴。
+- `work_dir/02_smoothing_manifest.jsonl`：每个 episode 的位置/旋转改变量和 jerk；
+- `work_dir/02_smoothing_report.json`：全数据集汇总；
+- `work_dir/02_smoothing_comparison.rrd`：灰色原始轨迹、蓝色平滑轨迹和两者姿态坐标轴。
 
 该阶段不改变帧数，因此视频无需选帧。确认 RRD 和报告可接受后，再单独决定是否增加内部静止
 平台压缩，避免把“去抖”和“删除重复时间点”混在一次数据变换中。
+
+### 相邻步长百分位限制
+
+`step_limit` 是独立可选阶段。`01` 从未平滑的转换轨迹计算并固定位移和旋转百分位阈值；
+`03` 在可选平滑后将所有相邻步长投影到该阈值以内。`percentile: 95` 表示原始分布约 95% 的相邻步长
+不超过该值；90 更强，99 更保守。百分位数必须严格介于 0 和 100 之间。
+
+该阶段保持帧数、夹爪和端点不变，并基于处理后的 `observation.state` 重建 action。输出包括：
+
+- `work_dir/01_step_limit_reference.json`：未平滑原始分布的固定阈值；
+- `work_dir/03_step_limit_manifest.jsonl`：每个 episode 的处理前后步长与迭代次数；
+- `work_dir/03_step_limit_report.json`：全数据集汇总；
+- `work_dir/03_step_limit_comparison.rrd`：阶段输入与限制后轨迹对比。
 
 ### 首尾静止段裁剪
 
@@ -159,9 +177,9 @@ plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值
 - 重置 episode 内 `timestamp` 和 `frame_index`，重建全局 `index`；
 - 从裁剪后的 `observation.state` 重新生成 shifted action，保证新尾帧不会指向已删除的状态；
 - 更新 episode 长度和统计；
-- 写入 `work_dir/01_5_trim_manifest.jsonl`，供 05 对视频应用完全相同的帧切片。
+- 写入 `work_dir/04_trim_manifest.jsonl`，供 06 对视频应用完全相同的帧切片。
 
-如果裁剪阶段中断，重新运行 01（需要 `output.overwrite: true`）后依次执行 02、03，避免在已部分
+如果裁剪阶段中断，重新运行 01（需要 `output.overwrite: true`）后依次执行 02、03、04，避免在已部分
 处理的数据上重复裁剪。首次使用建议将 `validation.episode_limit` 设为 `1` 检查报告和视频同步。
 
 ### 前 50 帧空间取样与拐弯处过密点取舍
@@ -180,15 +198,16 @@ plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值
 
 阶段会生成：
 
-- `work_dir/01_7_turn_sparsification_manifest.jsonl`：保留/删除索引和每个 episode 的约束结果；
-- `work_dir/01_7_turn_sparsification_report.json`：全数据集删点比例；
-- `work_dir/01_7_turn_sparsification_comparison.rrd`：蓝色平滑输入、绿色保留点、黄色删除点。
+- `work_dir/05_turn_sparsification_manifest.jsonl`：保留/删除索引和每个 episode 的约束结果；
+- `work_dir/05_turn_sparsification_report.json`：全数据集删点比例；
+- `work_dir/05_turn_sparsification_comparison.rrd`：蓝色平滑输入、绿色保留点、黄色删除点。
 
-05 根据 manifest 从源视频选择完全相同的帧并重新编码，把输出重新设为固定 30 Hz；parquet 的 timestamp、
+05 若发现删帧后的相邻位姿超过已启用的百分位限制，会恢复该区间必要的帧。06 再根据 manifest 从源视频选择
+完全相同的帧并重新编码，把输出重新设为固定 30 Hz；parquet 的 timestamp、
 frame_index、全局 index 和 shifted action 同步重建。
 
 `requirements.txt` 锁定了与 OpenPI 相同 commit 的 LeRobot。默认
-`validation.require_lerobot_loader: true`，所以 `07` 除了检查 parquet、动作时序、rot6d、视频
+`validation.require_lerobot_loader: true`，所以 `08` 除了检查 parquet、动作时序、最终步长、rot6d、视频
 帧数和尺寸，还会实际通过 LeRobot loader 读取当前帧、图像和 32 步 action chunk。
 
 建议第一次把 `validation.episode_limit` 设为 `1`，并把 `output.root` 指向单独的 smoke 目录。全部通过后再改回 `null` 处理完整数据。
@@ -200,7 +219,8 @@ frame_index、全局 index 和 shifted action 同步重建。
 1. `output.overwrite: true`；
 2. 目标目录包含本流水线生成的 `.openpi_data_pipeline.json` 标记。
 
-因此不会覆盖源数据，也不会清理一个来源不明的目录。`02`、`03`、`04` 可以单独复跑。
+因此不会覆盖源数据，也不会清理一个来源不明的目录。已进入 `running` 或 `complete` 的轨迹改写阶段不可原地重复；
+需要修改参数时从 `01` 重建。
 
 ## 接入 OpenPI
 

@@ -242,6 +242,204 @@ def pose10_rotation_matrix(pose10: np.ndarray) -> np.ndarray:
     return np.stack([first, second, third], axis=-1)
 
 
+def rotation_matrix_to_quaternion(rotation: np.ndarray) -> np.ndarray:
+    """Convert rotation matrices to normalized xyzw quaternions."""
+    rotation = np.asarray(rotation, dtype=np.float64)
+    if rotation.ndim != 3 or rotation.shape[1:] != (3, 3):
+        raise ValueError(f"Expected rotation array [N,3,3], got {rotation.shape}")
+    result = np.empty((len(rotation), 4), dtype=np.float64)
+    for index, matrix in enumerate(rotation):
+        trace = float(np.trace(matrix))
+        if trace > 0.0:
+            scale = math.sqrt(trace + 1.0) * 2.0
+            x = (matrix[2, 1] - matrix[1, 2]) / scale
+            y = (matrix[0, 2] - matrix[2, 0]) / scale
+            z = (matrix[1, 0] - matrix[0, 1]) / scale
+            w = 0.25 * scale
+        elif matrix[0, 0] > matrix[1, 1] and matrix[0, 0] > matrix[2, 2]:
+            scale = math.sqrt(max(1.0 + matrix[0, 0] - matrix[1, 1] - matrix[2, 2], 0.0)) * 2.0
+            x = 0.25 * scale
+            y = (matrix[0, 1] + matrix[1, 0]) / scale
+            z = (matrix[0, 2] + matrix[2, 0]) / scale
+            w = (matrix[2, 1] - matrix[1, 2]) / scale
+        elif matrix[1, 1] > matrix[2, 2]:
+            scale = math.sqrt(max(1.0 + matrix[1, 1] - matrix[0, 0] - matrix[2, 2], 0.0)) * 2.0
+            x = (matrix[0, 1] + matrix[1, 0]) / scale
+            y = 0.25 * scale
+            z = (matrix[1, 2] + matrix[2, 1]) / scale
+            w = (matrix[0, 2] - matrix[2, 0]) / scale
+        else:
+            scale = math.sqrt(max(1.0 + matrix[2, 2] - matrix[0, 0] - matrix[1, 1], 0.0)) * 2.0
+            x = (matrix[0, 2] + matrix[2, 0]) / scale
+            y = (matrix[1, 2] + matrix[2, 1]) / scale
+            z = 0.25 * scale
+            w = (matrix[1, 0] - matrix[0, 1]) / scale
+        result[index] = [x, y, z, w]
+    norms = np.linalg.norm(result, axis=1)
+    if np.any(~np.isfinite(norms)) or np.any(norms < 1e-12):
+        raise ValueError("Could not convert rotation matrices to finite quaternions")
+    return result / norms[:, None]
+
+
+def quaternion_angles_deg(quaternion: np.ndarray) -> np.ndarray:
+    quaternion = np.asarray(quaternion, dtype=np.float64)
+    if quaternion.ndim != 2 or quaternion.shape[1] != 4:
+        raise ValueError(f"Expected quaternion array [N,4], got {quaternion.shape}")
+    if len(quaternion) < 2:
+        return np.empty(0, dtype=np.float64)
+    normalized = quaternion / np.linalg.norm(quaternion, axis=1, keepdims=True)
+    dot = np.sum(normalized[:-1] * normalized[1:], axis=1)
+    return np.degrees(2.0 * np.arccos(np.clip(np.abs(dot), 0.0, 1.0)))
+
+
+def slerp_quaternions(left: np.ndarray, right: np.ndarray, fraction: np.ndarray) -> np.ndarray:
+    """Interpolate matching xyzw quaternion rows along the shortest arc."""
+    left = np.asarray(left, dtype=np.float64)
+    right = np.asarray(right, dtype=np.float64)
+    fraction = np.asarray(fraction, dtype=np.float64)
+    dot = np.sum(left * right, axis=1)
+    right = np.where((dot < 0.0)[:, None], -right, right)
+    dot = np.clip(np.abs(dot), 0.0, 1.0)
+    theta = np.arccos(dot)
+    sine = np.sin(theta)
+    result = np.empty_like(left)
+    small = sine < 1e-8
+    result[small] = (
+        (1.0 - fraction[small, None]) * left[small]
+        + fraction[small, None] * right[small]
+    )
+    large = ~small
+    if np.any(large):
+        left_scale = np.sin((1.0 - fraction[large]) * theta[large]) / sine[large]
+        right_scale = np.sin(fraction[large] * theta[large]) / sine[large]
+        result[large] = left_scale[:, None] * left[large] + right_scale[:, None] * right[large]
+    return result / np.linalg.norm(result, axis=1, keepdims=True)
+
+
+def pose10_step_metrics(pose10: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return adjacent TCP translation in metres and SO(3) angle in degrees."""
+    pose10 = np.asarray(pose10, dtype=np.float32)
+    if pose10.ndim != 2 or pose10.shape[1] < 10:
+        raise ValueError(f"Expected pose array [N,>=10], got {pose10.shape}")
+    position_steps = np.linalg.norm(np.diff(pose10[:, :3].astype(np.float64), axis=0), axis=1)
+    quaternion = rotation_matrix_to_quaternion(pose10_rotation_matrix(pose10))
+    return position_steps, quaternion_angles_deg(quaternion)
+
+
+def limit_pose10_steps(
+    pose10: np.ndarray,
+    *,
+    position_limit_m: float,
+    rotation_limit_deg: float,
+    preserve_endpoint_frames: int = 1,
+    max_sweeps: int = 3000,
+) -> tuple[np.ndarray, dict[str, float | int]]:
+    """Project adjacent TCP steps under fixed translation and rotation limits.
+
+    Position and orientation are constrained independently. The configured
+    endpoint frames never move, and gripper values are copied exactly.
+    """
+    pose10 = np.asarray(pose10, dtype=np.float32)
+    if pose10.ndim != 2 or pose10.shape[1] < 10:
+        raise ValueError(f"Expected pose array [N,>=10], got {pose10.shape}")
+    if not math.isfinite(position_limit_m) or position_limit_m <= 0:
+        raise ValueError("position_limit_m must be finite and positive")
+    if not math.isfinite(rotation_limit_deg) or not 0 < rotation_limit_deg <= 180:
+        raise ValueError("rotation_limit_deg must be finite, positive, and at most 180")
+    if preserve_endpoint_frames < 1:
+        raise ValueError("preserve_endpoint_frames must be at least 1")
+    if max_sweeps < 1:
+        raise ValueError("max_sweeps must be at least 1")
+    if len(pose10) < 2:
+        return pose10.copy(), {
+            "position_sweeps": 0,
+            "rotation_sweeps": 0,
+            "max_position_step_m": 0.0,
+            "max_rotation_step_deg": 0.0,
+        }
+
+    preserve = min(preserve_endpoint_frames, len(pose10) // 2)
+    fixed = np.zeros(len(pose10), dtype=bool)
+    fixed[:preserve] = True
+    fixed[-preserve:] = True
+
+    position = pose10[:, :3].astype(np.float64).copy()
+    position_sweeps = 0
+    for sweep in range(max_sweeps):
+        for parity in (0, 1):
+            indices = np.arange(parity, len(position) - 1, 2)
+            delta = position[indices + 1] - position[indices]
+            distance = np.linalg.norm(delta, axis=1)
+            active = distance > position_limit_m
+            indices, delta, distance = indices[active], delta[active], distance[active]
+            if not len(indices):
+                continue
+            both_fixed = fixed[indices] & fixed[indices + 1]
+            if np.any(both_fixed):
+                pair = int(indices[np.flatnonzero(both_fixed)[0]])
+                raise ValueError(
+                    f"Fixed endpoint frames {pair} and {pair + 1} exceed the position step limit"
+                )
+            correction = delta * ((distance - position_limit_m) / distance)[:, None]
+            left_weight = np.where(fixed[indices], 0.0, np.where(fixed[indices + 1], 1.0, 0.5))
+            right_weight = 1.0 - left_weight
+            position[indices] += correction * left_weight[:, None]
+            position[indices + 1] -= correction * right_weight[:, None]
+        position_sweeps = sweep + 1
+        if np.max(np.linalg.norm(np.diff(position, axis=0), axis=1)) <= position_limit_m + 1e-10:
+            break
+    else:
+        raise RuntimeError(f"Position step limiting did not converge after {max_sweeps} sweeps")
+
+    quaternion = rotation_matrix_to_quaternion(pose10_rotation_matrix(pose10))
+    rotation_sweeps = 0
+    for sweep in range(max_sweeps):
+        for parity in (0, 1):
+            indices = np.arange(parity, len(quaternion) - 1, 2)
+            left = quaternion[indices].copy()
+            right = quaternion[indices + 1].copy()
+            dot = np.sum(left * right, axis=1)
+            angle = np.degrees(2.0 * np.arccos(np.clip(np.abs(dot), 0.0, 1.0)))
+            active = angle > rotation_limit_deg
+            indices, left, right, angle = indices[active], left[active], right[active], angle[active]
+            if not len(indices):
+                continue
+            both_fixed = fixed[indices] & fixed[indices + 1]
+            if np.any(both_fixed):
+                pair = int(indices[np.flatnonzero(both_fixed)[0]])
+                raise ValueError(
+                    f"Fixed endpoint frames {pair} and {pair + 1} exceed the rotation step limit"
+                )
+            excess_fraction = (angle - rotation_limit_deg) / angle
+            left_weight = np.where(fixed[indices], 0.0, np.where(fixed[indices + 1], 1.0, 0.5))
+            right_weight = 1.0 - left_weight
+            quaternion[indices] = slerp_quaternions(left, right, excess_fraction * left_weight)
+            quaternion[indices + 1] = slerp_quaternions(right, left, excess_fraction * right_weight)
+        rotation_sweeps = sweep + 1
+        if np.max(quaternion_angles_deg(quaternion), initial=0.0) <= rotation_limit_deg + 1e-8:
+            break
+    else:
+        raise RuntimeError(f"Rotation step limiting did not converge after {max_sweeps} sweeps")
+
+    rotation = quaternion_to_matrix(quaternion)
+    result = pose10.copy()
+    result[:, :3] = position.astype(np.float32)
+    result[:, 3:9] = np.concatenate([rotation[:, :, 0], rotation[:, :, 1]], axis=1)
+    result[:, 9] = pose10[:, 9]
+    result[fixed] = pose10[fixed]
+    position_steps, rotation_steps = pose10_step_metrics(result)
+    if np.max(position_steps, initial=0.0) > position_limit_m + 1e-7:
+        raise RuntimeError("Float32 position output exceeds the configured step limit")
+    if np.max(rotation_steps, initial=0.0) > rotation_limit_deg + 1e-5:
+        raise RuntimeError("Float32 rotation output exceeds the configured step limit")
+    return result, {
+        "position_sweeps": position_sweeps,
+        "rotation_sweeps": rotation_sweeps,
+        "max_position_step_m": float(np.max(position_steps, initial=0.0)),
+        "max_rotation_step_deg": float(np.max(rotation_steps, initial=0.0)),
+    }
+
+
 def smooth_pose10(
     pose10: np.ndarray,
     *,

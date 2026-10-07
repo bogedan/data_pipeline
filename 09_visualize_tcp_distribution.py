@@ -63,12 +63,12 @@ def main() -> None:
     info_path = dataset / "meta/info.json"
     episodes_path = dataset / "meta/episodes.jsonl"
     if not info_path.exists() or not episodes_path.exists():
-        raise SystemExit(f"Missing finalized dataset metadata under {dataset}; run 06_finalize_metadata.py first")
+        raise SystemExit(f"Missing finalized dataset metadata under {dataset}; run 07_finalize_metadata.py first")
 
     info = read_json(info_path)
     episodes = read_jsonl(episodes_path)
     chunks_size = int(info.get("chunks_size", config["output"].get("chunks_size", 1000)))
-    recording_path = args.output or (work_root(config) / "05_all_episode_tcp_pointcloud.rrd")
+    recording_path = args.output or (work_root(config) / "09_all_episode_tcp_pointcloud.rrd")
     recording_path = recording_path.expanduser().resolve()
     recording_path.parent.mkdir(parents=True, exist_ok=True)
 

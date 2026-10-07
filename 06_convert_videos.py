@@ -86,15 +86,15 @@ def main() -> None:
     commands: list[tuple[list[str], Path, Path, int]] = []
     trim_by_episode: dict[int, dict] = {}
     if bool(config.get("trim", {}).get("enabled", False)):
-        manifest_path = work_root(config) / "01_5_trim_manifest.jsonl"
+        manifest_path = work_root(config) / "04_trim_manifest.jsonl"
         if not manifest_path.exists():
-            raise SystemExit(f"Missing {manifest_path}; run 03_trim_static_segments.py first")
+            raise SystemExit(f"Missing {manifest_path}; run 04_trim_static_segments.py first")
         trim_by_episode = {int(row["episode_index"]): row for row in read_jsonl(manifest_path)}
     sparsification_by_episode: dict[int, dict] = {}
     if bool(config.get("turn_sparsification", {}).get("enabled", False)):
-        manifest_path = work_root(config) / "01_7_turn_sparsification_manifest.jsonl"
+        manifest_path = work_root(config) / "05_turn_sparsification_manifest.jsonl"
         if not manifest_path.exists():
-            raise SystemExit(f"Missing {manifest_path}; run 04_sparsify_dense_turns.py first")
+            raise SystemExit(f"Missing {manifest_path}; run 05_sparsify_dense_turns.py first")
         sparsification_by_episode = {int(row["episode_index"]): row for row in read_jsonl(manifest_path)}
 
     for episode in episodes:

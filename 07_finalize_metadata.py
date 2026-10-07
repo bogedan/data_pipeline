@@ -81,12 +81,23 @@ def main() -> None:
     if "robot_type" not in source_info:
         raise ValueError(f"Source dataset metadata has no robot_type: {source / 'meta/info.json'}")
     episodes = read_jsonl(episodes_path)
+    marker = read_json(output / PIPELINE_MARKER)
     if bool(config.get("turn_sparsification", {}).get("enabled", False)):
-        partial_name = "01_7_partial_episode_stats.jsonl"
+        if marker.get("turn_sparsification_status") != "complete":
+            raise SystemExit("Metadata finalization requires a completed 05_sparsify_dense_turns.py stage")
+        partial_name = "05_partial_episode_stats.jsonl"
     elif bool(config.get("trim", {}).get("enabled", False)):
-        partial_name = "01_5_partial_episode_stats.jsonl"
+        if marker.get("trim_status") != "complete":
+            raise SystemExit("Metadata finalization requires a completed 04_trim_static_segments.py stage")
+        partial_name = "04_partial_episode_stats.jsonl"
+    elif bool(config.get("step_limit", {}).get("enabled", False)):
+        if marker.get("step_limit_status") != "complete":
+            raise SystemExit("Metadata finalization requires a completed 03_limit_tcp_steps.py stage")
+        partial_name = "03_partial_episode_stats.jsonl"
     elif bool(config.get("smoothing", {}).get("enabled", False)):
-        partial_name = "01_6_partial_episode_stats.jsonl"
+        if marker.get("smoothing_status") != "complete":
+            raise SystemExit("Metadata finalization requires a completed 02_smooth_trajectories.py stage")
+        partial_name = "02_partial_episode_stats.jsonl"
     else:
         partial_name = "01_partial_episode_stats.jsonl"
     partial_path = work / partial_name
@@ -104,7 +115,7 @@ def main() -> None:
             output, source_info["video_path"], episode_index, chunks_size, video_key=output_key
         )
         if not video_path.exists():
-            raise SystemExit(f"Missing {video_path}; 05_convert_videos.py did not complete successfully")
+            raise SystemExit(f"Missing {video_path}; 06_convert_videos.py did not complete successfully")
         stats = partial[episode_index]["stats"]
         stats[output_key] = sample_video_stats(video_path, sample_frames)
         episode_stats.append({"episode_index": episode_index, "stats": stats})
@@ -161,7 +172,6 @@ def main() -> None:
         "features": features,
     }
     write_json(output / "meta/info.json", info)
-    marker = read_json(output / PIPELINE_MARKER)
     marker["complete"] = True
     marker["episodes"] = len(episodes)
     marker["frames"] = total_frames

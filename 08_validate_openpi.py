@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 from pipeline_common import episode_path
 from pipeline_common import load_config
 from pipeline_common import output_root
+from pipeline_common import pose10_step_metrics
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
 from pipeline_common import rotation_quality
@@ -74,13 +75,27 @@ def main() -> None:
     root = output_root(config)
     info_path = root / "meta/info.json"
     if not info_path.exists():
-        raise SystemExit(f"Missing {info_path}; run 06_finalize_metadata.py successfully before validation")
+        raise SystemExit(f"Missing {info_path}; run 07_finalize_metadata.py successfully before validation")
     info = read_json(info_path)
     episodes = read_jsonl(root / "meta/episodes.jsonl")
     chunks_size = int(info["chunks_size"])
     horizon = int(config["validation"].get("action_horizon", 32))
     errors: list[str] = []
-    maxima = {"action_alignment": 0.0, "rotation_orthogonality": 0.0, "rotation_determinant": 0.0}
+    maxima = {
+        "action_alignment": 0.0,
+        "rotation_orthogonality": 0.0,
+        "rotation_determinant": 0.0,
+        "position_step_m": 0.0,
+        "rotation_step_deg": 0.0,
+    }
+    step_limit_enabled = bool(config.get("step_limit", {}).get("enabled", False))
+    if step_limit_enabled:
+        reference_path = work_root(config) / "01_step_limit_reference.json"
+        if not reference_path.exists():
+            raise SystemExit(f"Missing {reference_path}; rerun the trajectory stages")
+        step_reference = read_json(reference_path)
+        position_step_limit_m = float(step_reference["position_limit_m"])
+        rotation_step_limit_deg = float(step_reference["rotation_limit_deg"])
 
     required = {"observation.state", "action", "observation.images.fisheye_img"}
     missing = required - set(info["features"])
@@ -92,6 +107,12 @@ def main() -> None:
         table = pq.read_table(parquet_path, columns=["observation.state", "action"])
         state = np.asarray(table["observation.state"].combine_chunks().to_pylist(), dtype=np.float32)
         action = np.asarray(table["action"].combine_chunks().to_pylist(), dtype=np.float32)
+        if state.shape != action.shape or state.ndim != 2 or state.shape[1] != 10:
+            errors.append(
+                f"Episode {episode_index}: state/action shapes must match [N,10], got "
+                f"state={state.shape}, action={action.shape}"
+            )
+            continue
         offset = int(config["trajectory"]["action_offset_frames"])
         if offset == 0:
             alignment_error = float(np.max(np.abs(action - state)))
@@ -100,9 +121,19 @@ def main() -> None:
             maxima["action_alignment"] = max(
                 maxima["action_alignment"], float(np.max(np.abs(action[:-offset] - state[offset:])))
             )
+            maxima["action_alignment"] = max(
+                maxima["action_alignment"], float(np.max(np.abs(action[-offset:] - state[-1])))
+            )
         orthogonality, determinant = rotation_quality(np.concatenate([state, action], axis=0))
         maxima["rotation_orthogonality"] = max(maxima["rotation_orthogonality"], orthogonality)
         maxima["rotation_determinant"] = max(maxima["rotation_determinant"], determinant)
+        position_steps, rotation_steps = pose10_step_metrics(state)
+        maxima["position_step_m"] = max(
+            maxima["position_step_m"], float(np.max(position_steps, initial=0.0))
+        )
+        maxima["rotation_step_deg"] = max(
+            maxima["rotation_step_deg"], float(np.max(rotation_steps, initial=0.0))
+        )
         video_path = episode_path(
             root,
             info["video_path"],
@@ -127,6 +158,17 @@ def main() -> None:
         errors.append(f"Action/state temporal alignment error: {maxima['action_alignment']}")
     if maxima["rotation_orthogonality"] > 1e-5 or maxima["rotation_determinant"] > 1e-5:
         errors.append(f"Invalid rot6d geometry: {maxima}")
+    if step_limit_enabled:
+        if maxima["position_step_m"] > position_step_limit_m + 1e-7:
+            errors.append(
+                f"Final TCP position step {maxima['position_step_m']} m exceeds "
+                f"P{float(step_reference['percentile']):g} limit {position_step_limit_m} m"
+            )
+        if maxima["rotation_step_deg"] > rotation_step_limit_deg + 1e-5:
+            errors.append(
+                f"Final TCP rotation step {maxima['rotation_step_deg']} deg exceeds "
+                f"P{float(step_reference['percentile']):g} limit {rotation_step_limit_deg} deg"
+            )
 
     loader_status = "skipped"
     if bool(config["validation"].get("require_lerobot_loader", True)):
@@ -151,7 +193,7 @@ def main() -> None:
         "lerobot_loader": loader_status,
         "errors": errors,
     }
-    report_path = work_root(config) / "04_validation.json"
+    report_path = work_root(config) / "08_validation.json"
     write_json(report_path, report)
     print(f"Validation report: {report_path}")
     if errors:
