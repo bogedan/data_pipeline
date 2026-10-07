@@ -83,6 +83,8 @@ def main() -> None:
     marker = read_json(marker_path)
     if bool(config.get("smoothing", {}).get("enabled", False)) and marker.get("smoothing_status") != "complete":
         raise SystemExit("Trimming requires a completed 02_smooth_trajectories.py stage")
+    if bool(config.get("step_limit", {}).get("enabled", False)) and marker.get("step_limit_status") != "complete":
+        raise SystemExit("Trimming requires a completed 03_limit_tcp_steps.py stage")
     if marker.get("trim_status") in {"running", "complete"}:
         raise SystemExit(
             "This output has already entered the trim stage. Rerun 01_convert_trajectories.py "
@@ -156,8 +158,8 @@ def main() -> None:
             f"(head -{details['trimmed_head_frames']}, tail -{details['trimmed_tail_frames']})"
         )
 
-    write_jsonl(work / "01_5_trim_manifest.jsonl", manifest)
-    write_jsonl(work / "01_5_partial_episode_stats.jsonl", partial_stats)
+    write_jsonl(work / "04_trim_manifest.jsonl", manifest)
+    write_jsonl(work / "04_partial_episode_stats.jsonl", partial_stats)
     write_jsonl(episodes_path, trimmed_episodes)
     report = {
         "episodes": len(trimmed_episodes),
@@ -167,10 +169,10 @@ def main() -> None:
         "trimmed_tail_frames": sum(int(item["trimmed_tail_frames"]) for item in manifest),
         "thresholds": bounds_kwargs,
     }
-    write_json(work / "01_5_trim_report.json", report)
+    write_json(work / "04_trim_report.json", report)
     marker = read_json(marker_path)
     marker["trim_status"] = "complete"
-    marker["trim_report"] = str(work / "01_5_trim_report.json")
+    marker["trim_report"] = str(work / "04_trim_report.json")
     write_json(marker_path, marker)
     print(f"Trimmed {len(trimmed_episodes)} episodes: {report['frames_before']} -> {report['frames_after']} frames")
 

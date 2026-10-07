@@ -1,5 +1,5 @@
 source:
-  root: /share/project/lxy/test_20261003_155718_width_p95
+  root: /share/project/lxy/test_20261003_155718_width
   state_key: observation.state
   camera_key: observation.images.mvs_DA9057815
 work_dir: /share/project/lxy/data_pipeline/work/test_20261003_155718_openpi_smooth_2
@@ -37,7 +37,7 @@ trajectory:
   tail_policy: repeat_last
   gripper:
     mapping: linear
-    calibration_file: /share/project/lxy/test_20261003_155718_width_p95/assets/calibration/gripper_01.yaml
+    calibration_file: /share/project/lxy/test_20261003_155718_width/assets/calibration/gripper_01.yaml
     distance_section: distance
     radians_section: width_to_rad
     clip: true
@@ -58,6 +58,13 @@ smoothing:
   visualization_episode_index: 0
   visualization_pose_stride: 10
   visualization_axis_length_m: 0.005
+step_limit:
+  enabled: true
+  percentile: 95.0
+  preserve_endpoint_frames: 1
+  max_sweeps: 3000
+  storage_margin: 0.999
+  visualization_episode_index: 0
 turn_sparsification:
   enabled: true
   prefix_frames: 50

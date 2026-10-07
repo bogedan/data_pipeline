@@ -4,6 +4,8 @@ from pipeline_common import quaternion_to_matrix
 from pipeline_common import apply_pose_transform
 from pipeline_common import shifted_actions
 from pipeline_common import find_static_trim_bounds
+from pipeline_common import limit_pose10_steps
+from pipeline_common import pose10_step_metrics
 from pipeline_common import rotation_quality
 from pipeline_common import sample_spatial_prefix
 from pipeline_common import smooth_pose10
@@ -125,6 +127,49 @@ def test_smooth_pose10_outputs_valid_rotations() -> None:
     orthogonality, determinant = rotation_quality(result)
     assert orthogonality < 1e-5
     assert determinant < 1e-5
+
+
+def test_limit_pose10_steps_enforces_position_and_rotation_limits() -> None:
+    nine = 9
+    pose = _identity_pose(nine)
+    pose[:, 0] = np.asarray([0.0, 0.05, 0.10, 0.60, 0.20, 0.25, 0.20, 0.10, 0.0])
+    angles = np.radians([0.0, 5.0, 10.0, 70.0, 20.0, 15.0, 10.0, 5.0, 0.0])
+    pose[:, 3] = np.cos(angles)
+    pose[:, 4] = np.sin(angles)
+    pose[:, 6] = -np.sin(angles)
+    pose[:, 7] = np.cos(angles)
+    pose[:, 9] = np.linspace(0.0, 1.0, nine)
+
+    result, details = limit_pose10_steps(
+        pose,
+        position_limit_m=0.1,
+        rotation_limit_deg=12.0,
+        preserve_endpoint_frames=1,
+    )
+
+    position_steps, rotation_steps = pose10_step_metrics(result)
+    assert np.max(position_steps) <= 0.1 + 1e-7
+    assert np.max(rotation_steps) <= 12.0 + 1e-5
+    np.testing.assert_array_equal(result[[0, -1]], pose[[0, -1]])
+    np.testing.assert_array_equal(result[:, 9], pose[:, 9])
+    assert details["position_sweeps"] > 0
+    assert details["rotation_sweeps"] > 0
+
+
+def test_limit_pose10_steps_rejects_violating_fixed_frames() -> None:
+    pose = _identity_pose(2)
+    pose[1, 0] = 1.0
+    try:
+        limit_pose10_steps(
+            pose,
+            position_limit_m=0.1,
+            rotation_limit_deg=10.0,
+            preserve_endpoint_frames=1,
+        )
+    except ValueError as error:
+        assert "Fixed endpoint frames" in str(error)
+    else:
+        raise AssertionError("Expected an infeasible fixed endpoint pair to be rejected")
 
 
 def _turn_sparsification_kwargs() -> dict:

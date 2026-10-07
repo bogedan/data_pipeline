@@ -13,6 +13,7 @@ from pipeline_common import array_stats
 from pipeline_common import episode_path
 from pipeline_common import load_config
 from pipeline_common import output_root
+from pipeline_common import pose10_step_metrics
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
 from pipeline_common import shifted_actions
@@ -107,8 +108,10 @@ def main() -> None:
     marker = read_json(marker_path)
     if bool(config.get("smoothing", {}).get("enabled", False)) and marker.get("smoothing_status") != "complete":
         raise SystemExit("Turn sparsification requires a completed 02_smooth_trajectories.py stage")
+    if bool(config.get("step_limit", {}).get("enabled", False)) and marker.get("step_limit_status") != "complete":
+        raise SystemExit("Turn sparsification requires a completed 03_limit_tcp_steps.py stage")
     if bool(config.get("trim", {}).get("enabled", False)) and marker.get("trim_status") != "complete":
-        raise SystemExit("Turn sparsification requires a completed 03_trim_static_segments.py stage")
+        raise SystemExit("Turn sparsification requires a completed 04_trim_static_segments.py stage")
     if marker.get("turn_sparsification_status") in {"running", "complete"}:
         raise SystemExit(
             "This output has already entered turn sparsification. Rerun 01_convert_trajectories.py "
@@ -137,6 +140,17 @@ def main() -> None:
         "prefix_frames": int(sparsification.get("prefix_frames", 50)),
         "min_spacing_m": float(sparsification.get("prefix_min_spacing_m", 0.001)),
     }
+    step_limit_enabled = bool(config.get("step_limit", {}).get("enabled", False))
+    if step_limit_enabled:
+        reference_path = work / "01_step_limit_reference.json"
+        if not reference_path.exists():
+            raise SystemExit(f"Missing {reference_path}; rerun 01_convert_trajectories.py")
+        step_reference = read_json(reference_path)
+        position_step_limit_m = float(step_reference["position_limit_m"])
+        rotation_step_limit_deg = float(step_reference["rotation_limit_deg"])
+    else:
+        position_step_limit_m = float("inf")
+        rotation_step_limit_deg = float("inf")
 
     plans: list[dict] = []
     for episode in episodes:
@@ -147,14 +161,40 @@ def main() -> None:
         prefix_keep, prefix_details = sample_spatial_prefix(state, **prefix_kwargs)
         turn_keep_relative, turn_details = sparsify_dense_turns(state[prefix_keep], **kwargs)
         keep_indices = prefix_keep[turn_keep_relative]
-        turn_removed_indices = [int(prefix_keep[index]) for index in turn_details["removed_indices"]]
+        restored_indices: list[int] = []
+        if step_limit_enabled:
+            selected_position_steps, selected_rotation_steps = pose10_step_metrics(state[keep_indices])
+            violating_pairs = np.flatnonzero(
+                (selected_position_steps > position_step_limit_m + 1e-7)
+                | (selected_rotation_steps > rotation_step_limit_deg + 1e-5)
+            )
+            for pair in violating_pairs:
+                restored_indices.extend(
+                    range(int(keep_indices[pair]) + 1, int(keep_indices[pair + 1]))
+                )
+            if restored_indices:
+                keep_indices = np.unique(
+                    np.concatenate([keep_indices, np.asarray(restored_indices, dtype=np.int64)])
+                )
+        keep_set = set(keep_indices.tolist())
+        prefix_removed_indices = [
+            int(index) for index in prefix_details["prefix_removed_indices"] if index not in keep_set
+        ]
+        turn_removed_indices = [
+            int(prefix_keep[index])
+            for index in turn_details["removed_indices"]
+            if int(prefix_keep[index]) not in keep_set
+        ]
         protected_turn_indices = [int(prefix_keep[index]) for index in turn_details["protected_turn_indices"]]
         details = {
             **prefix_details,
             **turn_details,
-            "removed_indices": sorted(set(prefix_details["prefix_removed_indices"] + turn_removed_indices)),
+            "prefix_kept_frames": int(prefix_details["prefix_input_frames"]) - len(prefix_removed_indices),
+            "prefix_removed_indices": prefix_removed_indices,
+            "removed_indices": sorted(set(prefix_removed_indices + turn_removed_indices)),
             "turn_removed_indices": turn_removed_indices,
             "protected_turn_indices": protected_turn_indices,
+            "step_limit_restored_indices": sorted(set(restored_indices)),
         }
         plans.append({"episode_index": episode_index, "path": path, "state": state, "keep": keep_indices, "details": details})
 
@@ -170,6 +210,12 @@ def main() -> None:
         table = pq.read_table(plan["path"])
         selected = table.take(pa.array(plan["keep"], type=pa.int64()))
         state = plan["state"][plan["keep"]]
+        if step_limit_enabled:
+            position_steps, rotation_steps = pose10_step_metrics(state)
+            if np.max(position_steps, initial=0.0) > position_step_limit_m + 1e-7:
+                raise RuntimeError(f"Episode {plan['episode_index']}: sparsification exceeded the position step limit")
+            if np.max(rotation_steps, initial=0.0) > rotation_step_limit_deg + 1e-5:
+                raise RuntimeError(f"Episode {plan['episode_index']}: sparsification exceeded the rotation step limit")
         action = shifted_actions(state, offset, tail_policy)
         converted = replace_columns(selected, state=state, action=action, fps=fps, global_start_index=global_index)
         temporary = plan["path"].with_suffix(".sparsified.parquet.tmp")
@@ -193,7 +239,7 @@ def main() -> None:
         global_index += len(converted)
         if plan["episode_index"] == visualization_episode:
             write_comparison_rrd(
-                work / "01_7_turn_sparsification_comparison.rrd",
+                work / "05_turn_sparsification_comparison.rrd",
                 plan["state"],
                 plan["keep"],
                 plan["details"]["removed_indices"],
@@ -205,8 +251,8 @@ def main() -> None:
             f"{original_length} -> {len(converted)} (-{details['removed_frames']})"
         )
 
-    write_jsonl(work / "01_7_turn_sparsification_manifest.jsonl", manifest)
-    write_jsonl(work / "01_7_partial_episode_stats.jsonl", partial_stats)
+    write_jsonl(work / "05_turn_sparsification_manifest.jsonl", manifest)
+    write_jsonl(work / "05_partial_episode_stats.jsonl", partial_stats)
     write_jsonl(episodes_path, converted_episodes)
     report = {
         "episodes": len(manifest),
@@ -216,15 +262,16 @@ def main() -> None:
         "turn_frames": sum(int(item["turn_frames"]) for item in manifest),
         "turn_regions": sum(int(item["turn_regions"]) for item in manifest),
         "prefix_removed_frames": sum(len(item["prefix_removed_indices"]) for item in manifest),
+        "step_limit_restored_frames": sum(len(item["step_limit_restored_indices"]) for item in manifest),
         "prefix_parameters": prefix_kwargs,
         "parameters": kwargs,
-        "visualization": str(work / "01_7_turn_sparsification_comparison.rrd") if visualization_written else None,
+        "visualization": str(work / "05_turn_sparsification_comparison.rrd") if visualization_written else None,
     }
     report["removal_fraction"] = report["removed_frames"] / max(report["frames_before"], 1)
-    write_json(work / "01_7_turn_sparsification_report.json", report)
+    write_json(work / "05_turn_sparsification_report.json", report)
     marker = read_json(marker_path)
     marker["turn_sparsification_status"] = "complete"
-    marker["turn_sparsification_report"] = str(work / "01_7_turn_sparsification_report.json")
+    marker["turn_sparsification_report"] = str(work / "05_turn_sparsification_report.json")
     write_json(marker_path, marker)
     print(f"Sparsified {report['frames_before']} -> {report['frames_after']} frames")
 

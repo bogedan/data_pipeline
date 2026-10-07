@@ -1,6 +1,6 @@
 # Source LeRobot v2.1 dataset.
 source:
-  root: /share/project/lxy/test_20261003_155718_width_p95
+  root: /share/project/lxy/test_20261003_155718_width
   state_key: observation.state
   # This square MVS view becomes OpenPI's single active base/fisheye view.
   camera_key: observation.images.mvs_DA9057815
@@ -40,7 +40,7 @@ trajectory:
   gripper:
     mapping: linear
     # Map the observed marker-center distance range onto the configured radian range.
-    calibration_file: /share/project/lxy/test_20261003_155718_width_p95/assets/calibration/gripper_01.yaml
+    calibration_file: /share/project/lxy/test_20261003_155718_width/assets/calibration/gripper_01.yaml
     distance_section: distance
     radians_section: width_to_rad
     clip: true
@@ -68,6 +68,16 @@ smoothing:
   visualization_episode_index: 0
   visualization_pose_stride: 10
   visualization_axis_length_m: 0.005
+
+# Compute this percentile from the converted trajectories before smoothing,
+# then enforce the fixed adjacent-step limits after smoothing.
+step_limit:
+  enabled: true
+  percentile: 95.0
+  preserve_endpoint_frames: 1
+  max_sweeps: 3000
+  storage_margin: 0.999
+  visualization_episode_index: 0
 
 # Spatially sample the first 50 frames to at least 1 mm TCP spacing, then apply
 # the conservative dense-turn filter to the remaining kept trajectory.

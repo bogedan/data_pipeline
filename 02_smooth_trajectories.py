@@ -166,7 +166,7 @@ def main() -> None:
         )
         if plan["episode_index"] == visualization_episode:
             write_comparison_rrd(
-                work / "01_6_smoothing_comparison.rrd",
+                work / "02_smoothing_comparison.rrd",
                 plan["raw"],
                 plan["smoothed"],
                 plan["episode_index"],
@@ -175,8 +175,8 @@ def main() -> None:
             visualization_written = True
         print(f"[{number}/{len(plans)}] smooth episode {plan['episode_index']:06d}: {len(converted)} frames")
 
-    write_jsonl(work / "01_6_smoothing_manifest.jsonl", manifest)
-    write_jsonl(work / "01_6_partial_episode_stats.jsonl", partial_stats)
+    write_jsonl(work / "02_smoothing_manifest.jsonl", manifest)
+    write_jsonl(work / "02_partial_episode_stats.jsonl", partial_stats)
     report = {
         "episodes": len(manifest),
         "frames": sum(int(item["frames"]) for item in manifest),
@@ -188,12 +188,12 @@ def main() -> None:
         "raw_position_jerk_rms": float(np.mean([item["raw_position_jerk_rms"] for item in manifest])),
         "smoothed_position_jerk_rms": float(np.mean([item["smoothed_position_jerk_rms"] for item in manifest])),
         "gripper_change_max_rad": float(np.max([item["gripper_change_max_rad"] for item in manifest])),
-        "visualization": str(work / "01_6_smoothing_comparison.rrd") if visualization_written else None,
+        "visualization": str(work / "02_smoothing_comparison.rrd") if visualization_written else None,
     }
-    write_json(work / "01_6_smoothing_report.json", report)
+    write_json(work / "02_smoothing_report.json", report)
     marker = read_json(marker_path)
     marker["smoothing_status"] = "complete"
-    marker["smoothing_report"] = str(work / "01_6_smoothing_report.json")
+    marker["smoothing_report"] = str(work / "02_smoothing_report.json")
     write_json(marker_path, marker)
     print(f"Smoothed {report['episodes']} episodes / {report['frames']} frames")
 
