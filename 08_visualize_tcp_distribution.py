@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pyarrow.parquet as pq
 import rerun as rr
+import rerun.blueprint as rrb
 
 from pipeline_common import episode_path
 from pipeline_common import load_config
@@ -28,14 +29,36 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Write all episode TCP positions to one Rerun 3D recording.")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--output", type=Path, default=None, help="Output .rrd path; defaults to work_dir.")
-    parser.add_argument("--point-radius-m", type=float, default=0.0012)
+    parser.add_argument(
+        "--point-radius-m",
+        type=float,
+        default=None,
+        help="Override visualization.point_radius_m from the config.",
+    )
     parser.add_argument("--with-paths", action="store_true", help="Also draw a line strip for every episode.")
-    parser.add_argument("--path-radius-m", type=float, default=0.00035)
+    parser.add_argument(
+        "--path-radius-m",
+        type=float,
+        default=None,
+        help="Override visualization.path_radius_m from the config.",
+    )
     args = parser.parse_args()
-    if args.point_radius_m <= 0 or args.path_radius_m <= 0:
-        raise SystemExit("Point and path radii must be positive")
 
     config = load_config(args.config)
+    visualization = config.get("visualization", {})
+    point_radius_m = (
+        float(args.point_radius_m)
+        if args.point_radius_m is not None
+        else float(visualization.get("point_radius_m", 0.0012))
+    )
+    path_radius_m = (
+        float(args.path_radius_m)
+        if args.path_radius_m is not None
+        else float(visualization.get("path_radius_m", 0.00035))
+    )
+    if point_radius_m <= 0 or path_radius_m <= 0:
+        raise SystemExit("visualization point and path radii must be positive")
+
     dataset = output_root(config)
     info_path = dataset / "meta/info.json"
     episodes_path = dataset / "meta/episodes.jsonl"
@@ -50,7 +73,18 @@ def main() -> None:
     recording_path.parent.mkdir(parents=True, exist_ok=True)
 
     rr.init("openpi_all_episode_tcp_distribution", spawn=False)
-    rr.save(str(recording_path))
+    blueprint = rrb.Blueprint(
+        rrb.Spatial3DView(origin="/world", contents="/world/**", name="TCP trajectories"),
+        rrb.TextDocumentView(
+            origin="/description",
+            contents="/description",
+            name="Description",
+            visible=False,
+            overrides={"/description": rrb.EntityBehavior(visible=False)},
+        ),
+        auto_views=False,
+    )
+    rr.save(str(recording_path), default_blueprint=blueprint)
     rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
 
     total_points = 0
@@ -71,15 +105,15 @@ def main() -> None:
 
         color = episode_color(episode_index)
         entity = f"world/episodes/episode_{episode_index:06d}"
-        rr.log(f"{entity}/points", rr.Points3D(xyz, colors=color, radii=args.point_radius_m), static=True)
+        rr.log(f"{entity}/points", rr.Points3D(xyz, colors=color, radii=point_radius_m), static=True)
         if args.with_paths:
             rr.log(
                 f"{entity}/path",
-                rr.LineStrips3D([xyz], colors=color, radii=args.path_radius_m),
+                rr.LineStrips3D([xyz], colors=color, radii=path_radius_m),
                 static=True,
             )
-        rr.log(f"{entity}/start", rr.Points3D(xyz[:1], colors=[255, 255, 255], radii=args.point_radius_m * 1.8), static=True)
-        rr.log(f"{entity}/end", rr.Points3D(xyz[-1:], colors=[20, 20, 20], radii=args.point_radius_m * 1.8), static=True)
+        rr.log(f"{entity}/start", rr.Points3D(xyz[:1], colors=[255, 255, 255], radii=point_radius_m * 1.8), static=True)
+        rr.log(f"{entity}/end", rr.Points3D(xyz[-1:], colors=[20, 20, 20], radii=point_radius_m * 1.8), static=True)
 
         total_points += len(xyz)
         bounds_min = np.minimum(bounds_min, np.min(xyz, axis=0))
