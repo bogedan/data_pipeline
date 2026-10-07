@@ -29,8 +29,8 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 ```text
 00_inspect_source.py          检查源 metadata、parquet、视频和外部程序
 01_convert_trajectories.py    quaternion -> column rot6d，width_m -> angle_rad，构造 action
-02_trim_static_segments.py    裁掉 episode 首尾长静止段，重建索引/action，并记录视频裁剪范围
-03_smooth_trajectories.py     平滑 TCP 平移和 SO(3) 旋转；不改帧数、不平滑夹爪
+02_smooth_trajectories.py     平滑 TCP 平移和 SO(3) 旋转；不改帧数、不平滑夹爪
+03_trim_static_segments.py    在平滑轨迹上裁掉首尾长静止段，重建索引/action，并记录视频裁剪范围
 04_sparsify_dense_turns.py    只减少拐弯处空间距离过密的点；直线和夹爪变化帧不删
 05_convert_videos.py          选择主相机，中心裁剪并编码为 240x240 H.264
 06_finalize_metadata.py       生成 info、episodes_stats 和全局 stats
@@ -48,6 +48,8 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 - `trajectory.gripper.calibration_file`：同时包含 `distance` 和 `width_to_rad` 的夹爪标定文件；
 - `task.prompt`：训练指令；
 - `output.root`：输出目录。
+- `visualization.point_radius_m`：TCP 点云中每个点的显示半径；
+- `visualization.path_radius_m`：使用 `--with-paths` 时轨迹线的显示半径。
 
 脚本不会根据文件名、字段名或 `mock` 等标记猜测位姿变换是否已经使用。当前数据已经在采集
 阶段应用了 tracker→TCP 变换，所以配置明确使用 `pose_transform.enabled: false`，直接使用
@@ -71,13 +73,26 @@ source /share/project/liyuanyuan/anaconda3/bin/activate data_pipeline
 set -e
 python 00_inspect_source.py --config config.yaml
 python 01_convert_trajectories.py --config config.yaml
-python 02_trim_static_segments.py --config config.yaml
-python 03_smooth_trajectories.py --config config.yaml
+python 02_smooth_trajectories.py --config config.yaml
+python 03_trim_static_segments.py --config config.yaml
 python 04_sparsify_dense_turns.py --config config.yaml
 python 05_convert_videos.py --config config.yaml
 python 06_finalize_metadata.py --config config.yaml
 python 07_validate_openpi.py --config config.yaml
 python 08_visualize_tcp_distribution.py --config config.yaml
+```
+
+也可以使用脚本一次执行完整流水线：
+
+```bash
+cd /share/project/lxy/data_pipeline
+./run_data_pipeline.sh
+```
+
+默认读取项目内的 `config.yaml`。如需使用其他配置文件，将路径作为第一个参数传入：
+
+```bash
+./run_data_pipeline.sh config_smooth_then_trim.yaml
 ```
 
 `set -e` 会让任一步骤失败时立即停止，避免在缺少上一步产物时继续运行后续脚本。修复配置或
@@ -87,33 +102,35 @@ python 08_visualize_tcp_distribution.py --config config.yaml
 白点表示起点、黑点表示终点；添加 `--with-paths` 可以同时绘制轨迹连线。输出位置为
 `work_dir/05_all_episode_tcp_pointcloud.rrd`。
 
-远程服务器没有 X server 时，使用 OpenPI 的 Rerun Web Viewer：
+远程服务器没有 X server 时，可以直接使用 `data_pipeline` 环境中的 Rerun Web Viewer。当前
+RRD 使用 `rerun-sdk==0.23.1` 生成；该环境已经安装此版本。重建环境时可执行：
 
 ```bash
-cd /share/project/dcw/projects/openpi
+source /share/project/liyuanyuan/anaconda3/bin/activate data_pipeline
+python -m pip install "rerun-sdk==0.23.1"
+rerun --version
+```
 
-uv run rerun --serve-web \
+启动 Web Viewer：
+
+```bash
+source /share/project/liyuanyuan/anaconda3/bin/activate data_pipeline
+
+rerun --serve-web \
   --bind=0.0.0.0 \
   --web-viewer-port=9090 \
   --port=9876 \
-  /share/project/lxy/data_pipeline/work/test_20261003_155718_openpi_smooth/05_all_episode_tcp_pointcloud.rrd
+  /share/project/lxy/data_pipeline/work/test_20261003_155718_openpi_smooth_2/05_all_episode_tcp_pointcloud.rrd
 ```
 
-然后转发服务器的 9090 和 9876 端口，在本地浏览器打开终端输出的完整 9090 URL。
+如果服务器端口没有直接开放，在本地执行 SSH 转发：
 
-### 首尾静止段裁剪
+```bash
+ssh -L 9090:localhost:9090 -L 9876:localhost:9876 用户名@服务器地址
+```
 
-`trim` 配置综合 TCP 平移、旋转和夹爪变化检测 episode 离开初始/最终静止 plateau 的时刻。
-默认阈值为 5 mm、3 度和 0.1 rad，并在动作边界前后各保留 5 帧。裁剪阶段会：
-
-- 对 parquet 使用 `[start_frame, end_frame)` 切片；
-- 重置 episode 内 `timestamp` 和 `frame_index`，重建全局 `index`；
-- 从裁剪后的 `observation.state` 重新生成 shifted action，保证新尾帧不会指向已删除的状态；
-- 更新 episode 长度和统计；
-- 写入 `work_dir/01_5_trim_manifest.jsonl`，供 05 对视频应用完全相同的帧切片。
-
-如果裁剪阶段中断，重新运行 01（需要 `output.overwrite: true`）后再执行裁剪，避免在已部分
-裁剪的数据上重复裁剪。首次使用建议将 `validation.episode_limit` 设为 `1` 检查报告和视频同步。
+最后在本地浏览器打开服务器终端输出的完整 `9090` URL。Web Viewer 页面使用 `9090`，数据流
+使用 `9876`，两者都需要可达。
 
 ### TCP 轨迹平滑
 
@@ -130,9 +147,24 @@ uv run rerun --serve-web \
 该阶段不改变帧数，因此视频无需选帧。确认 RRD 和报告可接受后，再单独决定是否增加内部静止
 平台压缩，避免把“去抖”和“删除重复时间点”混在一次数据变换中。
 
+### 首尾静止段裁剪
+
+`trim` 在平滑之后运行，综合 TCP 平移、旋转和夹爪变化检测 episode 离开初始/最终静止
+plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值后，才视为真正开始/结束运动，
+以忽略孤立的跟踪抖动；动作边界前后仍各保留 5 帧。裁剪阶段会：
+
+- 对 parquet 使用 `[start_frame, end_frame)` 切片；
+- 重置 episode 内 `timestamp` 和 `frame_index`，重建全局 `index`；
+- 从裁剪后的 `observation.state` 重新生成 shifted action，保证新尾帧不会指向已删除的状态；
+- 更新 episode 长度和统计；
+- 写入 `work_dir/01_5_trim_manifest.jsonl`，供 05 对视频应用完全相同的帧切片。
+
+如果裁剪阶段中断，重新运行 01（需要 `output.overwrite: true`）后依次执行 02、03，避免在已部分
+处理的数据上重复裁剪。首次使用建议将 `validation.episode_limit` 设为 `1` 检查报告和视频同步。
+
 ### 前 50 帧空间取样与拐弯处过密点取舍
 
-`turn_sparsification` 在平滑之后运行。它先对每个 episode 的前 `prefix_frames`（默认 50）帧
+`turn_sparsification` 在平滑和裁剪之后运行。它先对每个 episode 的前 `prefix_frames`（默认 50）帧
 进行空间取样：首帧保留，TCP 距离上一个保留帧达到 `prefix_min_spacing_m`（默认 1 mm）后才
 保留下一帧，并同时检查到第 50 帧边界的距离。第 50 帧之后不参与这一步取样。
 
@@ -154,7 +186,7 @@ uv run rerun --serve-web \
 frame_index、全局 index 和 shifted action 同步重建。
 
 `requirements.txt` 锁定了与 OpenPI 相同 commit 的 LeRobot。默认
-`validation.require_lerobot_loader: true`，所以 `04` 除了检查 parquet、动作时序、rot6d、视频
+`validation.require_lerobot_loader: true`，所以 `07` 除了检查 parquet、动作时序、rot6d、视频
 帧数和尺寸，还会实际通过 LeRobot loader 读取当前帧、图像和 32 步 action chunk。
 
 建议第一次把 `validation.episode_limit` 设为 `1`，并把 `output.root` 指向单独的 smoke 目录。全部通过后再改回 `null` 处理完整数据。

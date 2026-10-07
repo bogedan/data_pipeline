@@ -1,66 +1,56 @@
-# Source LeRobot v2.1 dataset.
 source:
   root: /share/project/lxy/test_20261003_155718_width_p95
   state_key: observation.state
-  # This square MVS view becomes OpenPI's single active base/fisheye view.
   camera_key: observation.images.mvs_DA9057815
-
-# Intermediate reports and partial statistics. Safe to delete after validation.
 work_dir: /share/project/lxy/data_pipeline/work/test_20261003_155718_openpi_smooth_2
-
 output:
   root: /share/project/lxy/test_20261003_155718_openpi_smooth_2
   robot_type: omniumix_single_arm
   chunks_size: 1000
-  # 01 only removes an existing output when it contains this pipeline's marker.
   overwrite: true
-
 task:
-  # null preserves source tasks. A string replaces all episode tasks and task_index values.
-  prompt: "Pick up the red cup and place it on the yellow plate."
-
+  prompt: Pick up the red cup and place it on the yellow plate.
 trajectory:
-  position_indices: [0, 1, 2]
-  quaternion_indices: [3, 4, 5, 6]
+  position_indices:
+  - 0
+  - 1
+  - 2
+  quaternion_indices:
+  - 3
+  - 4
+  - 5
+  - 6
   quaternion_order: xyzw
   gripper_index: 7
-
-  # The collection pipeline already applied the tracker->TCP transform.
-  # Keep this false to avoid applying my_transform a second time.
   pose_transform:
     enabled: false
     rotation_order: intrinsic_xyz
-    rotation_deg: {x: 30.0, y: 0.0, z: -90.0}
+    rotation_deg:
+      x: 30.0
+      y: 0.0
+      z: -90.0
     translation_frame: rotated_local
-    translation_m: [-0.00680, 0.0, 0.20087]
-
-  # Dataset convention: observation.state[t] = P_t, action[t] = P_{t+1}.
+    translation_m:
+    - -0.0068
+    - 0.0
+    - 0.20087
   action_offset_frames: 1
   tail_policy: repeat_last
-
   gripper:
     mapping: linear
-    # Map the observed marker-center distance range onto the configured radian range.
     calibration_file: /share/project/lxy/test_20261003_155718_width_p95/assets/calibration/gripper_01.yaml
     distance_section: distance
     radians_section: width_to_rad
     clip: true
-
-# Remove long pose plateaus after trajectory conversion and apply the same
-# [start_frame, end_frame) slice to videos in stage 05.
 trim:
   enabled: true
-  position_threshold_m: 0.020
+  position_threshold_m: 0.02
   rotation_threshold_deg: 3.0
   gripper_threshold_rad: 0.1
   pre_roll_frames: 5
   post_roll_frames: 5
-  # Ignore isolated threshold crossings caused by tracking jitter.
   min_active_frames: 5
   min_episode_frames: 32
-
-# Smooth TCP translation and SO(3) rotation without deleting or adding frames.
-# Gripper values and the first/last endpoint frames remain unchanged.
 smoothing:
   enabled: true
   window_size: 5
@@ -69,9 +59,6 @@ smoothing:
   visualization_episode_index: 0
   visualization_pose_stride: 10
   visualization_axis_length_m: 0.005
-
-# Spatially sample the first 50 frames to at least 1 mm TCP spacing, then apply
-# the conservative dense-turn filter to the remaining kept trajectory.
 turn_sparsification:
   enabled: true
   prefix_frames: 50
@@ -86,12 +73,11 @@ turn_sparsification:
   gripper_change_threshold_rad: 0.02
   max_consecutive_removed: 1
   visualization_episode_index: 0
-
 video:
   output_key: observation.images.fisheye_img
   width: 240
   height: 240
-  crop_mode: center_square  # center_square or stretch
+  crop_mode: center_square
   codec: libx264
   crf: 18
   preset: medium
@@ -99,16 +85,11 @@ video:
   workers: 4
   ffmpeg: ffmpeg
   ffprobe: ffprobe
-
 metadata:
-  # Image statistics are sampled only for metadata; OpenPI does not normalize images with these values.
   video_stats_frames_per_episode: 100
-
 visualization:
-  # Rerun uses metric radii. Keep points smaller than the 1 mm sampling spacing.
   point_radius_m: 0.0012
   path_radius_m: 0.00035
-
 validation:
   action_horizon: 32
   episode_limit: null
