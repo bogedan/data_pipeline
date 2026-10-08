@@ -2,17 +2,18 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import shutil
 
 import pyarrow.parquet as pq
 import yaml
 
 from pipeline_common import episode_path
+from pipeline_common import gripper_calibration_path
 from pipeline_common import load_config
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
 from pipeline_common import source_root
+from pipeline_common import source_feature_keys
 from pipeline_common import work_root
 from pipeline_common import write_json
 
@@ -25,8 +26,7 @@ def main() -> None:
     root = source_root(config)
     info = read_json(root / "meta/info.json")
     episodes = read_jsonl(root / "meta/episodes.jsonl")
-    state_key = config["source"]["state_key"]
-    camera_key = config["source"]["camera_key"]
+    state_key, camera_key = source_feature_keys(info)
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -50,7 +50,7 @@ def main() -> None:
         )
 
     gripper_config = config["trajectory"]["gripper"]
-    calibration_path = Path(gripper_config["calibration_file"]).expanduser().resolve()
+    calibration_path = gripper_calibration_path(config)
     calibration_values = None
     if not calibration_path.exists():
         errors.append(f"Missing gripper calibration file: {calibration_path}")

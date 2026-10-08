@@ -1,12 +1,6 @@
 # Source LeRobot v2.1 dataset.
 source:
   root: /share/project/lxy/test_20261003_155718_width
-  state_key: observation.state
-  # This square MVS view becomes OpenPI's single active base/fisheye view.
-  camera_key: observation.images.mvs_DA9057815
-
-# Intermediate reports and partial statistics. Safe to delete after validation.
-work_dir: /share/project/lxy/data_pipeline/work/test_20261003_155718_openpi_final
 
 output:
   root: /share/project/lxy/test_20261003_155718_openpi_final
@@ -39,8 +33,7 @@ trajectory:
 
   gripper:
     mapping: linear
-    # Map the observed marker-center distance range onto the configured radian range.
-    calibration_file: /share/project/lxy/test_20261003_155718_width/assets/calibration/gripper_01.yaml
+    # The calibration is resolved from source.root/assets/calibration using gripper_index's field name.
     distance_section: distance
     radians_section: width_to_rad
     clip: true

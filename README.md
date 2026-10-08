@@ -43,10 +43,13 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 
 先检查并修改 `config.yaml`，尤其是：
 
-- `source.camera_key`：训练使用哪一路相机；
+- `source.root`：LeRobot v2.1 源数据集目录；流水线从其 `meta/info.json` 读取标准的
+  `observation.state`，并自动选择唯一的方形视频字段作为 OpenPI 的主相机；
+- `output.root`：最终数据集目录；中间报告和统计自动写入同级的 `<output.root>_work`；
 - `trajectory.action_offset_frames`：state 与 action 的时间关系；
 - `trajectory.pose_transform.enabled`：是否额外应用一次固定的 tracker→TCP 变换，必须明确填 true/false；
-- `trajectory.gripper.calibration_file`：同时包含 `distance` 和 `width_to_rad` 的夹爪标定文件；
+- `trajectory.gripper_index`：夹爪宽度在 `observation.state` 中的索引；流水线根据该字段名从
+  `source.root/assets/calibration/<gripper_id>.yaml` 自动读取标定；
 - `smoothing.enabled`：是否在硬步长限制前执行局部轨迹平滑；
 - `step_limit.enabled`：是否限制相邻帧 TCP 位移和旋转；
 - `step_limit.percentile`：从未平滑的转换轨迹计算的百分位数，例如 90、95 或 99；
@@ -62,7 +65,7 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 `observation.state`。不能在转换阶段再次应用 `my_transform`，否则会形成重复变换。
 
 四元数会先正规化并转换成旋转矩阵，再取旋转矩阵前两列形成 column-rot6d。夹爪转换每次
-运行时读取 `gripper_01.yaml`，把 `distance.observed_min_m/observed_max_m` 线性映射到
+运行时从源数据集资产中读取对应的 `gripper_*.yaml`，把 `distance.observed_min_m/observed_max_m` 线性映射到
 `width_to_rad.min_rad/max_rad`，并进行裁剪，不在流水线配置中复制标定数值。
 
 安装轻量处理依赖；OpenPI 自己的环境若已包含这些包，可以直接使用它：
@@ -107,7 +110,7 @@ episode 之前失败，可在修复后从该编号继续；若 marker 已显示 
 
 `09` 只读取最终数据集，不修改 parquet 或视频。默认每个 episode 使用不同颜色绘制 TCP 点云，
 白点表示起点、黑点表示终点；添加 `--with-paths` 可以同时绘制轨迹连线。输出位置为
-`work_dir/09_all_episode_tcp_pointcloud.rrd`。
+`<output.root>_work/09_all_episode_tcp_pointcloud.rrd`。
 
 远程服务器没有 X server 时，可以直接使用 `data_pipeline` 环境中的 Rerun Web Viewer。当前
 RRD 使用 `rerun-sdk==0.23.1` 生成；该环境已经安装此版本。重建环境时可执行：
@@ -147,9 +150,9 @@ ssh -L 9090:localhost:9090 -L 9876:localhost:9876 用户名@服务器地址
 
 平滑后会从新的 `observation.state` 重新构造 shifted action，并写出：
 
-- `work_dir/02_smoothing_manifest.jsonl`：每个 episode 的位置/旋转改变量和 jerk；
-- `work_dir/02_smoothing_report.json`：全数据集汇总；
-- `work_dir/02_smoothing_comparison.rrd`：灰色原始轨迹、蓝色平滑轨迹和两者姿态坐标轴。
+- `<output.root>_work/02_smoothing_manifest.jsonl`：每个 episode 的位置/旋转改变量和 jerk；
+- `<output.root>_work/02_smoothing_report.json`：全数据集汇总；
+- `<output.root>_work/02_smoothing_comparison.rrd`：灰色原始轨迹、蓝色平滑轨迹和两者姿态坐标轴。
 
 该阶段不改变帧数，因此视频无需选帧。确认 RRD 和报告可接受后，再单独决定是否增加内部静止
 平台压缩，避免把“去抖”和“删除重复时间点”混在一次数据变换中。
@@ -162,10 +165,10 @@ ssh -L 9090:localhost:9090 -L 9876:localhost:9876 用户名@服务器地址
 
 该阶段保持帧数、夹爪和端点不变，并基于处理后的 `observation.state` 重建 action。输出包括：
 
-- `work_dir/01_step_limit_reference.json`：未平滑原始分布的固定阈值；
-- `work_dir/03_step_limit_manifest.jsonl`：每个 episode 的处理前后步长与迭代次数；
-- `work_dir/03_step_limit_report.json`：全数据集汇总；
-- `work_dir/03_step_limit_comparison.rrd`：阶段输入与限制后轨迹对比。
+- `<output.root>_work/01_step_limit_reference.json`：未平滑原始分布的固定阈值；
+- `<output.root>_work/03_step_limit_manifest.jsonl`：每个 episode 的处理前后步长与迭代次数；
+- `<output.root>_work/03_step_limit_report.json`：全数据集汇总；
+- `<output.root>_work/03_step_limit_comparison.rrd`：阶段输入与限制后轨迹对比。
 
 ### 首尾静止段裁剪
 
@@ -177,7 +180,7 @@ plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值
 - 重置 episode 内 `timestamp` 和 `frame_index`，重建全局 `index`；
 - 从裁剪后的 `observation.state` 重新生成 shifted action，保证新尾帧不会指向已删除的状态；
 - 更新 episode 长度和统计；
-- 写入 `work_dir/04_trim_manifest.jsonl`，供 06 对视频应用完全相同的帧切片。
+- 写入 `<output.root>_work/04_trim_manifest.jsonl`，供 06 对视频应用完全相同的帧切片。
 
 如果裁剪阶段中断，重新运行 01（需要 `output.overwrite: true`）后依次执行 02、03、04，避免在已部分
 处理的数据上重复裁剪。首次使用建议将 `validation.episode_limit` 设为 `1` 检查报告和视频同步。
@@ -198,9 +201,9 @@ plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值
 
 阶段会生成：
 
-- `work_dir/05_turn_sparsification_manifest.jsonl`：保留/删除索引和每个 episode 的约束结果；
-- `work_dir/05_turn_sparsification_report.json`：全数据集删点比例；
-- `work_dir/05_turn_sparsification_comparison.rrd`：蓝色平滑输入、绿色保留点、黄色删除点。
+- `<output.root>_work/05_turn_sparsification_manifest.jsonl`：保留/删除索引和每个 episode 的约束结果；
+- `<output.root>_work/05_turn_sparsification_report.json`：全数据集删点比例；
+- `<output.root>_work/05_turn_sparsification_comparison.rrd`：蓝色平滑输入、绿色保留点、黄色删除点。
 
 05 若发现删帧后的相邻位姿超过已启用的百分位限制，会恢复该区间必要的帧。06 再根据 manifest 从源视频选择
 完全相同的帧并重新编码，把输出重新设为固定 30 Hz；parquet 的 timestamp、
