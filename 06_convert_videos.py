@@ -13,6 +13,7 @@ from pipeline_common import output_root
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
 from pipeline_common import source_root
+from pipeline_common import source_feature_keys
 from pipeline_common import work_root
 
 
@@ -80,7 +81,7 @@ def main() -> None:
     episodes = read_jsonl(output / "meta/episodes.jsonl")
     source_chunks_size = int(source_info.get("chunks_size", 1000))
     output_chunks_size = int(config["output"].get("chunks_size", 1000))
-    input_key = config["source"]["camera_key"]
+    _, input_key = source_feature_keys(source_info)
     output_key = config["video"]["output_key"]
     ffmpeg = str(config["video"]["ffmpeg"])
     commands: list[tuple[list[str], Path, Path, int]] = []

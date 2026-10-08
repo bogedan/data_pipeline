@@ -21,6 +21,7 @@ from pipeline_common import read_json
 from pipeline_common import read_jsonl
 from pipeline_common import shifted_actions
 from pipeline_common import source_root
+from pipeline_common import source_feature_keys
 from pipeline_common import state8_to_pose10
 from pipeline_common import work_root
 from pipeline_common import write_json
@@ -60,7 +61,7 @@ def main() -> None:
     work = work_root(config)
     info = read_json(source / "meta/info.json")
     episodes = read_jsonl(source / "meta/episodes.jsonl")
-    state_key = config["source"]["state_key"]
+    state_key, _ = source_feature_keys(info)
     source_chunks_size = int(info.get("chunks_size", 1000))
     output_chunks_size = int(config["output"].get("chunks_size", 1000))
     offset = int(config["trajectory"].get("action_offset_frames", 1))

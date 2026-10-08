@@ -28,7 +28,10 @@ def episode_color(episode_index: int) -> list[int]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Write all episode TCP positions to one Rerun 3D recording.")
     parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--output", type=Path, default=None, help="Output .rrd path; defaults to work_dir.")
+    parser.add_argument(
+        "--output", type=Path, default=None,
+        help="Output .rrd path; defaults to the <output.root>_work directory.",
+    )
     parser.add_argument(
         "--point-radius-m",
         type=float,

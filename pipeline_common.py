@@ -38,12 +38,64 @@ def source_root(config: dict[str, Any]) -> Path:
     return Path(config["source"]["root"]).expanduser().resolve()
 
 
+def source_feature_keys(info: dict[str, Any]) -> tuple[str, str]:
+    """Resolve the trajectory state and single square camera from dataset metadata."""
+    features = info.get("features")
+    if not isinstance(features, dict):
+        raise ValueError("Source meta/info.json must contain a features mapping")
+
+    state_key = "observation.state"
+    if state_key not in features:
+        raise ValueError(f"Source metadata does not contain the canonical state feature {state_key!r}")
+
+    square_cameras: list[str] = []
+    video_cameras: list[str] = []
+    for key, feature in features.items():
+        if not isinstance(feature, dict) or feature.get("dtype") != "video":
+            continue
+        video_cameras.append(key)
+        shape = feature.get("shape")
+        if isinstance(shape, list) and len(shape) >= 2 and shape[0] == shape[1]:
+            square_cameras.append(key)
+    if len(square_cameras) != 1:
+        raise ValueError(
+            "Expected exactly one square video feature in source metadata; "
+            f"found square={sorted(square_cameras)}, all_video={sorted(video_cameras)}"
+        )
+    return state_key, square_cameras[0]
+
+
+def gripper_calibration_path(config: dict[str, Any]) -> Path:
+    """Resolve the gripper calibration bundled with the source dataset."""
+    root = source_root(config)
+    info = read_json(root / "meta/info.json")
+    features = info.get("features", {})
+    state = features.get("observation.state", {}) if isinstance(features, dict) else {}
+    names = state.get("names") if isinstance(state, dict) else None
+    gripper_index = int(config["trajectory"]["gripper_index"])
+    if not isinstance(names, list) or not 0 <= gripper_index < len(names):
+        raise ValueError(
+            "Cannot resolve gripper calibration: observation.state names do not contain "
+            f"configured gripper index {gripper_index}"
+        )
+    field_name = names[gripper_index]
+    suffix = ".width_m"
+    if not isinstance(field_name, str) or not field_name.endswith(suffix):
+        raise ValueError(
+            "Cannot resolve gripper calibration from state field at index "
+            f"{gripper_index}: {field_name!r}; expected '<gripper_id>{suffix}'"
+        )
+    gripper_id = field_name[: -len(suffix)]
+    return root / "assets" / "calibration" / f"{gripper_id}.yaml"
+
+
 def output_root(config: dict[str, Any]) -> Path:
     return Path(config["output"]["root"]).expanduser().resolve()
 
 
 def work_root(config: dict[str, Any]) -> Path:
-    return Path(config["work_dir"]).expanduser().resolve()
+    output = output_root(config)
+    return output.with_name(f"{output.name}_work")
 
 
 def read_json(path: Path) -> Any:
@@ -119,7 +171,7 @@ def map_gripper(values: np.ndarray, config: dict[str, Any]) -> np.ndarray:
     mapping = config["trajectory"]["gripper"]
     if mapping.get("mapping", "linear") != "linear":
         raise ValueError("Only trajectory.gripper.mapping=linear is currently supported")
-    calibration_path = Path(mapping["calibration_file"]).expanduser().resolve()
+    calibration_path = gripper_calibration_path(config)
     with calibration_path.open(encoding="utf-8") as stream:
         calibration = yaml.safe_load(stream)
     distance_section_name = str(mapping.get("distance_section", "distance"))
