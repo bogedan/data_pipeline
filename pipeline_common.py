@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,22 @@ POSE_NAMES = [
     "rot6d_5",
     "gripper_angle_rad",
 ]
+ARM_ORDER = ("right", "left")
+POSE_SIZE = 10
 PIPELINE_MARKER = ".openpi_data_pipeline.json"
+
+
+@dataclass(frozen=True)
+class ArmLayout:
+    role: str
+    pose_source: str
+    pose_indices: tuple[int, ...]
+    gripper_id: str
+    gripper_index: int
+    mvs_name: str
+    mvs_serial: str
+    source_video_key: str
+    output_video_key: str
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -38,8 +54,8 @@ def source_root(config: dict[str, Any]) -> Path:
     return Path(config["source"]["root"]).expanduser().resolve()
 
 
-def source_feature_keys(info: dict[str, Any]) -> tuple[str, str]:
-    """Resolve the trajectory state and single square camera from dataset metadata."""
+def source_feature_keys(info: dict[str, Any]) -> tuple[str, list[str]]:
+    """Return the canonical state key and all video keys."""
     features = info.get("features")
     if not isinstance(features, dict):
         raise ValueError("Source meta/info.json must contain a features mapping")
@@ -48,44 +64,86 @@ def source_feature_keys(info: dict[str, Any]) -> tuple[str, str]:
     if state_key not in features:
         raise ValueError(f"Source metadata does not contain the canonical state feature {state_key!r}")
 
-    square_cameras: list[str] = []
     video_cameras: list[str] = []
     for key, feature in features.items():
         if not isinstance(feature, dict) or feature.get("dtype") != "video":
             continue
         video_cameras.append(key)
-        shape = feature.get("shape")
-        if isinstance(shape, list) and len(shape) >= 2 and shape[0] == shape[1]:
-            square_cameras.append(key)
-    if len(square_cameras) != 1:
+    return state_key, sorted(video_cameras)
+
+
+def find_task_config(config: dict[str, Any]) -> Path:
+    override = config.get("source", {}).get("task_config")
+    if override:
+        path = Path(override).expanduser()
+        if not path.is_absolute():
+            config_path = Path(config.get("_config_path", Path.cwd() / "config.yaml"))
+            path = config_path.parent / path
+        path = path.resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"Source task config does not exist: {path}")
+        return path
+    candidates = []
+    for pattern in ("*.yaml", "*.yml"):
+        for path in sorted((source_root(config) / "assets").glob(pattern)):
+            with path.open(encoding="utf-8") as stream:
+                value = yaml.safe_load(stream)
+            if isinstance(value, dict) and isinstance(value.get("robot"), dict) and isinstance(value.get("dataset"), dict):
+                candidates.append(path)
+    if len(candidates) != 1:
         raise ValueError(
-            "Expected exactly one square video feature in source metadata; "
-            f"found square={sorted(square_cameras)}, all_video={sorted(video_cameras)}"
+            "Expected exactly one task YAML containing robot and dataset under source assets; "
+            f"found {[str(path) for path in candidates]}. Set source.task_config to disambiguate."
         )
-    return state_key, square_cameras[0]
+    return candidates[0]
 
 
-def gripper_calibration_path(config: dict[str, Any]) -> Path:
+def resolve_arm_layouts(config: dict[str, Any], info: dict[str, Any]) -> list[ArmLayout]:
+    task_path = find_task_config(config)
+    with task_path.open(encoding="utf-8") as stream:
+        task = yaml.safe_load(stream)
+    robot = task.get("robot", {})
+    arms = robot.get("arms")
+    if not isinstance(arms, dict) or not arms:
+        raise ValueError(f"Task config must define robot.arms: {task_path}")
+    unknown = sorted(set(arms) - set(ARM_ORDER))
+    if unknown or "right" not in arms:
+        raise ValueError(f"robot.arms must contain right and optional left; unsupported roles={unknown}")
+    names = info.get("features", {}).get("observation.state", {}).get("names")
+    if not isinstance(names, list):
+        raise ValueError("Source observation.state must provide field names")
+    mvs = robot.get("mvs", {})
+    layouts: list[ArmLayout] = []
+    for role in ARM_ORDER:
+        if role not in arms:
+            continue
+        arm = arms[role]
+        pose_source = str(arm["pose_source"])
+        gripper_id = str(arm["gripper"])
+        mvs_name = str(arm["mvs"])
+        serial = str(mvs[mvs_name]["serial"])
+        pose_prefix = f"{pose_source}_"
+        components = ("x", "y", "z", "qx", "qy", "qz", "qw")
+        pose_indices = []
+        for component in components:
+            matches = [i for i, name in enumerate(names) if isinstance(name, str) and name.startswith(pose_prefix) and name.endswith(f".{component}")]
+            if len(matches) != 1:
+                raise ValueError(f"Expected one {pose_source} field for {component}, found {matches}")
+            pose_indices.append(matches[0])
+        gripper_name = f"{gripper_id}.width_m"
+        if names.count(gripper_name) != 1:
+            raise ValueError(f"Expected one state field {gripper_name!r}")
+        source_video_key = f"observation.images.mvs_{serial}"
+        if source_video_key not in info.get("features", {}):
+            raise ValueError(f"Source metadata does not contain arm camera {source_video_key!r}")
+        output_video_key = "observation.images.fisheye_img" if len(arms) == 1 else f"observation.images.fisheye_img_{role}"
+        layouts.append(ArmLayout(role, pose_source, tuple(pose_indices), gripper_id, names.index(gripper_name), mvs_name, serial, source_video_key, output_video_key))
+    return layouts
+
+
+def gripper_calibration_path(config: dict[str, Any], gripper_id: str) -> Path:
     """Resolve the gripper calibration bundled with the source dataset."""
     root = source_root(config)
-    info = read_json(root / "meta/info.json")
-    features = info.get("features", {})
-    state = features.get("observation.state", {}) if isinstance(features, dict) else {}
-    names = state.get("names") if isinstance(state, dict) else None
-    gripper_index = int(config["trajectory"]["gripper_index"])
-    if not isinstance(names, list) or not 0 <= gripper_index < len(names):
-        raise ValueError(
-            "Cannot resolve gripper calibration: observation.state names do not contain "
-            f"configured gripper index {gripper_index}"
-        )
-    field_name = names[gripper_index]
-    suffix = ".width_m"
-    if not isinstance(field_name, str) or not field_name.endswith(suffix):
-        raise ValueError(
-            "Cannot resolve gripper calibration from state field at index "
-            f"{gripper_index}: {field_name!r}; expected '<gripper_id>{suffix}'"
-        )
-    gripper_id = field_name[: -len(suffix)]
     return root / "assets" / "calibration" / f"{gripper_id}.yaml"
 
 
@@ -166,12 +224,12 @@ def quaternion_to_matrix(quaternion: np.ndarray, order: str = "xyzw") -> np.ndar
     return matrix.astype(np.float32)
 
 
-def map_gripper(values: np.ndarray, config: dict[str, Any]) -> np.ndarray:
+def map_gripper(values: np.ndarray, config: dict[str, Any], gripper_id: str) -> np.ndarray:
     values = np.asarray(values, dtype=np.float32)
     mapping = config["trajectory"]["gripper"]
     if mapping.get("mapping", "linear") != "linear":
         raise ValueError("Only trajectory.gripper.mapping=linear is currently supported")
-    calibration_path = gripper_calibration_path(config)
+    calibration_path = gripper_calibration_path(config, gripper_id)
     with calibration_path.open(encoding="utf-8") as stream:
         calibration = yaml.safe_load(stream)
     distance_section_name = str(mapping.get("distance_section", "distance"))
@@ -188,9 +246,11 @@ def map_gripper(values: np.ndarray, config: dict[str, Any]) -> np.ndarray:
     output_max = float(radians_section["max_rad"])
     if not input_max > input_min:
         raise ValueError("trajectory.gripper.input_max must be greater than input_min")
+    disabled = values == -1.0
     result = output_min + (values - input_min) * (output_max - output_min) / (input_max - input_min)
     if bool(mapping.get("clip", True)):
         result = np.clip(result, min(output_min, output_max), max(output_min, output_max))
+    result[disabled] = -1.0
     return result.astype(np.float32)
 
 
@@ -245,26 +305,64 @@ def apply_pose_transform(
     return transformed_position.astype(np.float32), transformed_rotation.astype(np.float32)
 
 
-def state8_to_pose10(state: np.ndarray, config: dict[str, Any]) -> np.ndarray:
+def source_state_to_trajectory(state: np.ndarray, config: dict[str, Any], layouts: list[ArmLayout]) -> np.ndarray:
     state = np.asarray(state, dtype=np.float32)
     trajectory = config["trajectory"]
-    position_indices = trajectory["position_indices"]
-    quaternion_indices = trajectory["quaternion_indices"]
-    gripper_index = int(trajectory["gripper_index"])
-    needed = [*position_indices, *quaternion_indices, gripper_index]
-    if state.ndim != 2 or state.shape[1] <= max(needed):
-        raise ValueError(f"State shape {state.shape} cannot satisfy configured indices {needed}")
-
-    position = state[:, position_indices]
-    rotation = quaternion_to_matrix(state[:, quaternion_indices], trajectory.get("quaternion_order", "xyzw"))
-    position, rotation = apply_pose_transform(position, rotation, trajectory.get("pose_transform", {}))
-    # UMI/openpi uses the first two *columns* of R, flattened column by column.
-    rot6d = np.concatenate([rotation[:, :, 0], rotation[:, :, 1]], axis=1)
-    gripper = map_gripper(state[:, gripper_index], config)[:, None]
-    pose10 = np.concatenate([position, rot6d, gripper], axis=1)
-    if not np.all(np.isfinite(pose10)):
+    converted = []
+    for layout in layouts:
+        needed = [*layout.pose_indices, layout.gripper_index]
+        if state.ndim != 2 or state.shape[1] <= max(needed):
+            raise ValueError(f"State shape {state.shape} cannot satisfy arm {layout.role} indices {needed}")
+        position = state[:, layout.pose_indices[:3]]
+        rotation = quaternion_to_matrix(state[:, layout.pose_indices[3:]], "xyzw")
+        position, rotation = apply_pose_transform(position, rotation, trajectory.get("pose_transform", {}))
+        rot6d = np.concatenate([rotation[:, :, 0], rotation[:, :, 1]], axis=1)
+        gripper = map_gripper(state[:, layout.gripper_index], config, layout.gripper_id)[:, None]
+        converted.append(np.concatenate([position, rot6d, gripper], axis=1))
+    result = np.concatenate(converted, axis=1)
+    if not np.all(np.isfinite(result)):
         raise ValueError("Converted pose contains NaN or infinity")
-    return pose10.astype(np.float32)
+    return result.astype(np.float32)
+
+
+def trajectory_arm_blocks(trajectory: np.ndarray) -> list[np.ndarray]:
+    trajectory = np.asarray(trajectory, dtype=np.float32)
+    if trajectory.ndim != 2 or trajectory.shape[1] not in (POSE_SIZE, 2 * POSE_SIZE):
+        raise ValueError(f"Expected single/dual-arm trajectory [N,10|20], got {trajectory.shape}")
+    return [trajectory[:, start:start + POSE_SIZE] for start in range(0, trajectory.shape[1], POSE_SIZE)]
+
+
+def output_state_names(layouts: list[ArmLayout]) -> list[str]:
+    if len(layouts) == 1:
+        return POSE_NAMES.copy()
+    return [f"{layout.role}.{name}" for layout in layouts for name in POSE_NAMES]
+
+
+def trajectory_step_metrics(trajectory: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    metrics = [pose10_step_metrics(block) for block in trajectory_arm_blocks(trajectory)]
+    return np.maximum.reduce([item[0] for item in metrics]), np.maximum.reduce([item[1] for item in metrics])
+
+
+def smooth_trajectory(trajectory: np.ndarray, **kwargs: Any) -> np.ndarray:
+    return np.concatenate([smooth_pose10(block, **kwargs) for block in trajectory_arm_blocks(trajectory)], axis=1)
+
+
+def limit_trajectory_steps(trajectory: np.ndarray, **kwargs: Any) -> tuple[np.ndarray, dict[str, Any]]:
+    results = [limit_pose10_steps(block, **kwargs) for block in trajectory_arm_blocks(trajectory)]
+    merged = np.concatenate([item[0] for item in results], axis=1)
+    position, rotation = trajectory_step_metrics(merged)
+    return merged, {
+        "arms": [item[1] for item in results],
+        "position_sweeps": max(item[1]["position_sweeps"] for item in results),
+        "rotation_sweeps": max(item[1]["rotation_sweeps"] for item in results),
+        "max_position_step_m": float(np.max(position, initial=0.0)),
+        "max_rotation_step_deg": float(np.max(rotation, initial=0.0)),
+    }
+
+
+def trajectory_rotation_quality(trajectory: np.ndarray) -> tuple[float, float]:
+    values = [rotation_quality(block) for block in trajectory_arm_blocks(trajectory)]
+    return max(item[0] for item in values), max(item[1] for item in values)
 
 
 def shifted_actions(pose10: np.ndarray, offset: int, tail_policy: str) -> np.ndarray:
@@ -858,6 +956,185 @@ def find_static_trim_bounds(
         "trimmed_tail_frames": len(pose10) - end,
     }
     return start, end, details
+
+
+def sample_trajectory_prefix(
+    trajectory: np.ndarray, *, prefix_frames: int, min_spacing_m: float
+) -> tuple[np.ndarray, dict[str, Any]]:
+    blocks = trajectory_arm_blocks(trajectory)
+    if prefix_frames < 1 or min_spacing_m <= 0:
+        raise ValueError("prefix_frames and min_spacing_m must be positive")
+    length = len(trajectory)
+    if length <= 1:
+        return np.arange(length, dtype=np.int64), {"prefix_removed_indices": []}
+    boundary = min(prefix_frames, length - 1)
+
+    def movement(left: int, right: int) -> float:
+        return max(float(np.linalg.norm(block[right, :3] - block[left, :3])) for block in blocks)
+
+    kept = [0]
+    for index in range(1, boundary):
+        if movement(kept[-1], index) >= min_spacing_m:
+            kept.append(index)
+    while len(kept) > 1 and movement(kept[-1], boundary) < min_spacing_m:
+        kept.pop()
+    if movement(kept[-1], boundary) < min_spacing_m:
+        raise ValueError("Trajectory does not move enough across the prefix boundary")
+    indices = np.asarray(kept + list(range(boundary, length)), dtype=np.int64)
+    removed = sorted(set(range(min(prefix_frames, length))).difference(kept))
+    return indices, {
+        "prefix_input_frames": min(prefix_frames, length),
+        "prefix_kept_frames": min(prefix_frames, length) - len(removed),
+        "prefix_removed_indices": removed,
+    }
+
+
+def sparsify_trajectory_turns(trajectory: np.ndarray, **kwargs: Any) -> tuple[np.ndarray, dict[str, Any]]:
+    """Jointly sparsify turns; every arm must permit a candidate deletion."""
+    blocks = trajectory_arm_blocks(trajectory)
+    context = int(kwargs["turn_context_frames"])
+    length = len(trajectory)
+    if length < 2 * context + 1:
+        return np.arange(length, dtype=np.int64), {"removed_indices": [], "protected_turn_indices": []}
+    positions = [block[:, :3].astype(np.float64) for block in blocks]
+    rotations = [pose10_rotation_matrix(block).astype(np.float64) for block in blocks]
+    arm_turns = []
+    for position in positions:
+        turns = np.zeros(length, dtype=np.float64)
+        before = position[context:-context] - position[:-2 * context]
+        after = position[2 * context:] - position[context:-context]
+        before_norm, after_norm = np.linalg.norm(before, axis=1), np.linalg.norm(after, axis=1)
+        valid = (before_norm >= kwargs["min_turn_context_distance_m"]) & (after_norm >= kwargs["min_turn_context_distance_m"])
+        cosine = np.ones(len(before))
+        cosine[valid] = np.sum(before[valid] * after[valid], axis=1) / (before_norm[valid] * after_norm[valid])
+        turns[context:-context] = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+        arm_turns.append(turns)
+    turn_angles = np.maximum.reduce(arm_turns)
+    turn_mask = turn_angles >= float(kwargs["turn_angle_threshold_deg"])
+    protected: list[int] = []
+    index = 0
+    regions = 0
+    while index < length:
+        if not turn_mask[index]:
+            index += 1
+            continue
+        end = index + 1
+        while end < length and turn_mask[end]:
+            end += 1
+        protected.append(index + int(np.argmax(turn_angles[index:end])))
+        regions += 1
+        index = end
+    local_steps = []
+    for position in positions:
+        adjacent = np.linalg.norm(np.diff(position, axis=0), axis=1)
+        local = np.full(length, np.inf)
+        local[1:-1] = np.maximum(adjacent[:-1], adjacent[1:])
+        local_steps.append(local)
+    candidate_mask = np.logical_or.reduce([
+        (turns >= float(kwargs["turn_angle_threshold_deg"]))
+        & (steps <= float(kwargs["dense_step_threshold_m"]))
+        for turns, steps in zip(arm_turns, local_steps, strict=True)
+    ])
+    density = np.minimum.reduce(local_steps)
+    candidates = np.flatnonzero(candidate_mask)
+    candidates = candidates[np.argsort(density[candidates])]
+    keep = np.ones(length, dtype=bool)
+    keep[protected] = True
+    removed: list[int] = []
+    for candidate in candidates:
+        if candidate in protected:
+            continue
+        before = np.flatnonzero(keep[:candidate])
+        after = np.flatnonzero(keep[candidate + 1:])
+        if not len(before) or not len(after):
+            continue
+        previous, following = int(before[-1]), int(candidate + 1 + after[0])
+        if following - previous - 1 > int(kwargs["max_consecutive_removed"]):
+            continue
+        interval = np.arange(previous + 1, following)
+        alphas = (interval - previous) / (following - previous)
+        allowed = True
+        for block, position, rotation in zip(blocks, positions, rotations, strict=True):
+            if np.linalg.norm(position[following] - position[previous]) > kwargs["max_kept_step_m"]:
+                allowed = False
+                break
+            gripper = block[previous:following + 1, 9]
+            valid_gripper = gripper[gripper != -1.0]
+            if len(valid_gripper) and np.ptp(valid_gripper) > kwargs["gripper_change_threshold_rad"]:
+                allowed = False
+                break
+            interpolated = position[previous] + alphas[:, None] * (position[following] - position[previous])
+            if np.max(np.linalg.norm(position[interval] - interpolated, axis=1), initial=0.0) > kwargs["max_position_error_m"]:
+                allowed = False
+                break
+            left_q = rotation_matrix_to_quaternion(rotation[[previous]])
+            right_q = rotation_matrix_to_quaternion(rotation[[following]])
+            estimate_q = slerp_quaternions(np.repeat(left_q, len(interval), axis=0), np.repeat(right_q, len(interval), axis=0), alphas)
+            actual_q = rotation_matrix_to_quaternion(rotation[interval])
+            errors = np.degrees(2 * np.arccos(np.clip(np.abs(np.sum(estimate_q * actual_q, axis=1)), 0, 1)))
+            if np.max(errors, initial=0.0) > kwargs["max_rotation_error_deg"]:
+                allowed = False
+                break
+        if allowed:
+            keep[candidate] = False
+            removed.append(int(candidate))
+    return np.flatnonzero(keep).astype(np.int64), {
+        "turn_frames": int(np.sum(turn_mask)),
+        "turn_regions": regions,
+        "removed_indices": sorted(removed),
+        "protected_turn_indices": protected,
+        "max_turn_angle_deg": float(np.max(turn_angles, initial=0.0)),
+    }
+
+
+def find_trajectory_trim_bounds(trajectory: np.ndarray, **kwargs: Any) -> tuple[int, int, dict[str, Any]]:
+    """Find shared bounds from activity in any TCP or available gripper."""
+    blocks = trajectory_arm_blocks(trajectory)
+    length = len(trajectory)
+    minimum = int(kwargs["min_episode_frames"])
+    active_frames = int(kwargs.get("min_active_frames", 1))
+    if length < minimum:
+        raise ValueError(f"Episode has {length} frames, fewer than min_episode_frames={minimum}")
+
+    def activity(reference: int) -> np.ndarray:
+        combined = np.zeros(length, dtype=bool)
+        for block in blocks:
+            position = np.linalg.norm(block[:, :3] - block[reference, :3], axis=1)
+            rotation = pose10_rotation_matrix(block)
+            relative = np.einsum("ji,njk->nik", rotation[reference], rotation)
+            angle = np.degrees(np.arccos(np.clip((np.trace(relative, axis1=1, axis2=2) - 1) / 2, -1, 1)))
+            gripper = np.zeros(length, dtype=np.float32)
+            if block[reference, 9] != -1.0:
+                valid = block[:, 9] != -1.0
+                gripper[valid] = np.abs(block[valid, 9] - block[reference, 9])
+            combined |= (position > kwargs["position_threshold_m"]) | (angle > kwargs["rotation_threshold_deg"]) | (gripper > kwargs["gripper_threshold_rad"])
+        return combined
+
+    def sustained(active: np.ndarray) -> np.ndarray:
+        counts = np.convolve(active.astype(np.int32), np.ones(active_frames, dtype=np.int32), mode="valid")
+        return np.flatnonzero(counts == active_frames)
+
+    starts, ends = sustained(activity(0)), sustained(activity(-1))
+    if not len(starts) or not len(ends):
+        raise ValueError("Episode never leaves its initial/final static plateau")
+    first, last = int(starts[0]), int(ends[-1] + active_frames - 1)
+    start = max(0, first - int(kwargs["pre_roll_frames"]))
+    end = min(length, last + 1 + int(kwargs["post_roll_frames"]))
+    if end - start < minimum:
+        missing = minimum - (end - start)
+        grow = min(start, (missing + 1) // 2)
+        start -= grow
+        missing -= grow
+        end += min(length - end, missing)
+        if end - start < minimum:
+            start = max(0, end - minimum)
+    if end - start < minimum:
+        raise ValueError("Trimmed episode is shorter than min_episode_frames")
+    return start, end, {
+        "original_length": length, "first_active_frame": first, "last_active_frame": last,
+        "min_active_frames": active_frames, "start_frame": start, "end_frame": end,
+        "trimmed_length": end - start, "trimmed_head_frames": start, "trimmed_tail_frames": length - end,
+    }
 
 
 def array_stats(values: np.ndarray) -> dict[str, list[Any]]:

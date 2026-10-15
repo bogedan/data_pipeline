@@ -16,13 +16,14 @@ from pipeline_common import assert_safe_output
 from pipeline_common import episode_path
 from pipeline_common import load_config
 from pipeline_common import output_root
-from pipeline_common import pose10_step_metrics
+from pipeline_common import trajectory_step_metrics
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
 from pipeline_common import shifted_actions
 from pipeline_common import source_root
 from pipeline_common import source_feature_keys
-from pipeline_common import state8_to_pose10
+from pipeline_common import resolve_arm_layouts
+from pipeline_common import source_state_to_trajectory
 from pipeline_common import work_root
 from pipeline_common import write_json
 from pipeline_common import write_jsonl
@@ -62,6 +63,7 @@ def main() -> None:
     info = read_json(source / "meta/info.json")
     episodes = read_jsonl(source / "meta/episodes.jsonl")
     state_key, _ = source_feature_keys(info)
+    layouts = resolve_arm_layouts(config, info)
     source_chunks_size = int(info.get("chunks_size", 1000))
     output_chunks_size = int(config["output"].get("chunks_size", 1000))
     offset = int(config["trajectory"].get("action_offset_frames", 1))
@@ -86,10 +88,10 @@ def main() -> None:
         output_path = episode_path(output, info["data_path"], episode_index, output_chunks_size)
         table = pq.read_table(source_path)
         state = np.asarray(table[state_key].combine_chunks().to_pylist(), dtype=np.float32)
-        pose10 = state8_to_pose10(state, config)
+        pose10 = source_state_to_trajectory(state, config, layouts)
         action = shifted_actions(pose10, offset, tail_policy)
         if step_limit_enabled:
-            episode_position_steps, episode_rotation_steps = pose10_step_metrics(pose10)
+            episode_position_steps, episode_rotation_steps = trajectory_step_metrics(pose10)
             position_steps.append(episode_position_steps)
             rotation_steps.append(episode_rotation_steps)
 
@@ -178,6 +180,7 @@ def main() -> None:
             "action_offset_frames": offset,
             "tail_policy": tail_policy,
             "gripper_mapping": config["trajectory"]["gripper"],
+            "arms": [layout.role for layout in layouts],
         },
     )
     print(f"Converted {len(converted_episodes)} trajectory episodes into {output}")

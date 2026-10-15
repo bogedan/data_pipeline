@@ -7,17 +7,6 @@ output:
 task:
   prompt: Pick up the red cup and place it on the yellow plate.
 trajectory:
-  position_indices:
-  - 0
-  - 1
-  - 2
-  quaternion_indices:
-  - 3
-  - 4
-  - 5
-  - 6
-  quaternion_order: xyzw
-  gripper_index: 7
   pose_transform:
     enabled: false
     rotation_order: intrinsic_xyz
@@ -76,7 +65,6 @@ turn_sparsification:
   max_consecutive_removed: 1
   visualization_episode_index: 0
 video:
-  output_key: observation.images.fisheye_img
   width: 240
   height: 240
   crop_mode: center_square

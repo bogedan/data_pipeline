@@ -13,11 +13,6 @@ task:
   prompt: "Pick up the red cup and place it on the yellow plate."
 
 trajectory:
-  position_indices: [0, 1, 2]
-  quaternion_indices: [3, 4, 5, 6]
-  quaternion_order: xyzw
-  gripper_index: 7
-
   # The collection pipeline already applied the tracker->TCP transform.
   # Keep this false to avoid applying my_transform a second time.
   pose_transform:
@@ -33,7 +28,7 @@ trajectory:
 
   gripper:
     mapping: linear
-    # The calibration is resolved from source.root/assets/calibration using gripper_index's field name.
+    # Each arm's calibration is resolved from robot.arms in the archived task YAML.
     distance_section: distance
     radians_section: width_to_rad
     clip: true
@@ -90,7 +85,6 @@ turn_sparsification:
   visualization_episode_index: 0
 
 video:
-  output_key: observation.images.fisheye_img
   width: 240
   height: 240
   crop_mode: center_square  # center_square or stretch

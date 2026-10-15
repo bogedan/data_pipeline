@@ -11,13 +11,13 @@ import rerun as rr
 from pipeline_common import PIPELINE_MARKER
 from pipeline_common import array_stats
 from pipeline_common import episode_path
-from pipeline_common import limit_pose10_steps
+from pipeline_common import limit_trajectory_steps
 from pipeline_common import load_config
 from pipeline_common import output_root
-from pipeline_common import pose10_step_metrics
+from pipeline_common import trajectory_step_metrics
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
-from pipeline_common import rotation_quality
+from pipeline_common import trajectory_rotation_quality
 from pipeline_common import shifted_actions
 from pipeline_common import source_root
 from pipeline_common import work_root
@@ -137,18 +137,18 @@ def main() -> None:
         path = episode_path(output, source_info["data_path"], episode_index, chunks_size)
         table = pq.read_table(path, columns=["observation.state"])
         before = np.asarray(table["observation.state"].combine_chunks().to_pylist(), dtype=np.float32)
-        before_position, before_rotation = pose10_step_metrics(before)
+        before_position, before_rotation = trajectory_step_metrics(before)
         try:
-            limited, details = limit_pose10_steps(before, **kwargs)
+            limited, details = limit_trajectory_steps(before, **kwargs)
         except (ValueError, RuntimeError) as error:
             raise type(error)(f"Episode {episode_index}: {error}") from error
-        orthogonality, determinant = rotation_quality(limited)
+        orthogonality, determinant = trajectory_rotation_quality(limited)
         if max(orthogonality, determinant) > 1e-4:
             raise ValueError(
                 f"Episode {episode_index}: invalid limited rotations "
                 f"(orthogonality={orthogonality}, determinant={determinant})"
             )
-        after_position, after_rotation = pose10_step_metrics(limited)
+        after_position, after_rotation = trajectory_step_metrics(limited)
         if np.max(after_position, initial=0.0) > position_reference_m + 1e-7:
             raise RuntimeError(f"Episode {episode_index}: position limit was not satisfied after float32 storage")
         if np.max(after_rotation, initial=0.0) > rotation_reference_deg + 1e-5:

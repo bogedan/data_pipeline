@@ -13,7 +13,7 @@ from pipeline_common import output_root
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
 from pipeline_common import source_root
-from pipeline_common import source_feature_keys
+from pipeline_common import resolve_arm_layouts
 from pipeline_common import work_root
 
 
@@ -81,10 +81,9 @@ def main() -> None:
     episodes = read_jsonl(output / "meta/episodes.jsonl")
     source_chunks_size = int(source_info.get("chunks_size", 1000))
     output_chunks_size = int(config["output"].get("chunks_size", 1000))
-    _, input_key = source_feature_keys(source_info)
-    output_key = config["video"]["output_key"]
+    layouts = resolve_arm_layouts(config, source_info)
     ffmpeg = str(config["video"]["ffmpeg"])
-    commands: list[tuple[list[str], Path, Path, int]] = []
+    commands: list[tuple[list[str], Path, Path, int, str]] = []
     trim_by_episode: dict[int, dict] = {}
     if bool(config.get("trim", {}).get("enabled", False)):
         manifest_path = work_root(config) / "04_trim_manifest.jsonl"
@@ -110,55 +109,35 @@ def main() -> None:
             if episode_index not in sparsification_by_episode:
                 raise RuntimeError(f"Turn sparsification manifest has no entry for episode {episode_index}")
             kept_trimmed_indices = sparsification_by_episode[episode_index]["kept_trimmed_frame_indices"]
-        source_path = episode_path(
-            source, source_info["video_path"], episode_index, source_chunks_size, video_key=input_key
-        )
-        output_path = episode_path(
-            output, source_info["video_path"], episode_index, output_chunks_size, video_key=output_key
-        )
-        temporary = output_path.with_suffix(".tmp.mp4")
-        command = [
-            ffmpeg,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            str(source_path),
-            "-an",
-            "-vf",
-            video_filter(config, trim_bounds, kept_trimmed_indices, float(source_info["fps"])),
-            "-c:v",
-            str(config["video"]["codec"]),
-            "-preset",
-            str(config["video"]["preset"]),
-            "-crf",
-            str(config["video"]["crf"]),
-            "-pix_fmt",
-            str(config["video"]["pixel_format"]),
-            # Compatible with the older FFmpeg available on the data machine.
-            # This preserves input timestamps/frame count without resampling.
-            "-vsync",
-            "0",
-            "-movflags",
-            "+faststart",
-            "-f",
-            "mp4",
-            str(temporary),
-        ]
-        commands.append((command, temporary, output_path, episode_index))
+        for layout in layouts:
+            source_path = episode_path(
+                source, source_info["video_path"], episode_index, source_chunks_size, video_key=layout.source_video_key
+            )
+            output_path = episode_path(
+                output, source_info["video_path"], episode_index, output_chunks_size, video_key=layout.output_video_key
+            )
+            temporary = output_path.with_suffix(".tmp.mp4")
+            command = [
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source_path), "-an", "-vf",
+                video_filter(config, trim_bounds, kept_trimmed_indices, float(source_info["fps"])),
+                "-c:v", str(config["video"]["codec"]), "-preset", str(config["video"]["preset"]),
+                "-crf", str(config["video"]["crf"]), "-pix_fmt", str(config["video"]["pixel_format"]),
+                "-vsync", "0", "-movflags", "+faststart", "-f", "mp4", str(temporary),
+            ]
+            commands.append((command, temporary, output_path, episode_index, layout.role))
 
     workers = max(1, int(config["video"].get("workers", 1)))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(convert_one, command, temporary, output_path): episode_index
-            for command, temporary, output_path, episode_index in commands
+            executor.submit(convert_one, command, temporary, output_path): (episode_index, role)
+            for command, temporary, output_path, episode_index, role in commands
         }
         completed = 0
         for future in as_completed(futures):
             future.result()
             completed += 1
-            print(f"[{completed}/{len(commands)}] video episode {futures[future]:06d}")
+            episode_index, role = futures[future]
+            print(f"[{completed}/{len(commands)}] video episode {episode_index:06d} arm={role}")
     print(f"Converted {len(commands)} videos into {output}")
 
 

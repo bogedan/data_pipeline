@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 config_path="${1:-${script_dir}/config.yaml}"
+python_bin="${DATA_PIPELINE_PYTHON:-python}"
 
 if [[ ! -f "${config_path}" ]]; then
   echo "Config file not found: ${config_path}" >&2
@@ -11,7 +12,13 @@ if [[ ! -f "${config_path}" ]]; then
 fi
 config_path="$(realpath "${config_path}")"
 
-source /share/project/liyuanyuan/anaconda3/bin/activate data_pipeline
+if ! command -v "${python_bin}" >/dev/null 2>&1; then
+  echo "Python interpreter not found: ${python_bin}" >&2
+  echo "Activate the project environment or set DATA_PIPELINE_PYTHON=/path/to/python." >&2
+  exit 2
+fi
+
+echo "Python: $(command -v "${python_bin}")"
 cd "${script_dir}"
 
 stages=(
@@ -23,14 +30,13 @@ stages=(
   05_sparsify_dense_turns.py
   06_convert_videos.py
   07_finalize_metadata.py
-  08_validate_openpi.py
   09_visualize_tcp_distribution.py
 )
 
 for stage in "${stages[@]}"; do
   echo
   echo "==> Running ${stage}"
-  python -u "${stage}" --config "${config_path}"
+  "${python_bin}" -u "${stage}" --config "${config_path}"
 done
 
 echo

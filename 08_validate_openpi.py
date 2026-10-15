@@ -13,10 +13,10 @@ import pyarrow.parquet as pq
 from pipeline_common import episode_path
 from pipeline_common import load_config
 from pipeline_common import output_root
-from pipeline_common import pose10_step_metrics
+from pipeline_common import trajectory_step_metrics
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
-from pipeline_common import rotation_quality
+from pipeline_common import trajectory_rotation_quality
 from pipeline_common import work_root
 from pipeline_common import write_json
 
@@ -39,7 +39,7 @@ def probe_video(path: Path, ffprobe: str) -> dict:
     return json.loads(result.stdout)["streams"][0]
 
 
-def validate_lerobot_loader(root: Path, fps: int, horizon: int, openpi_root: Path) -> None:
+def validate_lerobot_loader(root: Path, fps: int, horizon: int, openpi_root: Path, state_size: int, video_keys: list[str]) -> None:
     sys.path.insert(0, str(openpi_root / "src"))
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.common.datasets.lerobot_dataset import LeRobotDatasetMetadata
@@ -57,11 +57,12 @@ def validate_lerobot_loader(root: Path, fps: int, horizon: int, openpi_root: Pat
         print(f"LeRobot loader: decoding validation sample {index}/{len(dataset) - 1}...", flush=True)
         sample = dataset[index]
         action = np.asarray(sample["action"])
-        image = np.asarray(sample["observation.images.fisheye_img"])
-        if action.shape != (horizon, 10):
-            raise ValueError(f"LeRobot action chunk has shape {action.shape}, expected {(horizon, 10)}")
-        if image.ndim != 3:
-            raise ValueError(f"LeRobot image has shape {image.shape}, expected 3 dimensions")
+        if action.shape != (horizon, state_size):
+            raise ValueError(f"LeRobot action chunk has shape {action.shape}, expected {(horizon, state_size)}")
+        for video_key in video_keys:
+            image = np.asarray(sample[video_key])
+            if image.ndim != 3:
+                raise ValueError(f"LeRobot image {video_key} has shape {image.shape}, expected 3 dimensions")
     if metadata.fps != fps:
         raise ValueError(f"LeRobot metadata fps={metadata.fps}, expected {fps}")
     print("LeRobot loader: strict validation passed", flush=True)
@@ -97,7 +98,9 @@ def main() -> None:
         position_step_limit_m = float(step_reference["position_limit_m"])
         rotation_step_limit_deg = float(step_reference["rotation_limit_deg"])
 
-    required = {"observation.state", "action", "observation.images.fisheye_img"}
+    state_size = int(info["features"]["observation.state"]["shape"][0])
+    video_keys = sorted(key for key, value in info["features"].items() if value.get("dtype") == "video")
+    required = {"observation.state", "action", *video_keys}
     missing = required - set(info["features"])
     if missing:
         errors.append(f"Missing required features: {sorted(missing)}")
@@ -107,9 +110,9 @@ def main() -> None:
         table = pq.read_table(parquet_path, columns=["observation.state", "action"])
         state = np.asarray(table["observation.state"].combine_chunks().to_pylist(), dtype=np.float32)
         action = np.asarray(table["action"].combine_chunks().to_pylist(), dtype=np.float32)
-        if state.shape != action.shape or state.ndim != 2 or state.shape[1] != 10:
+        if state.shape != action.shape or state.ndim != 2 or state.shape[1] != state_size:
             errors.append(
-                f"Episode {episode_index}: state/action shapes must match [N,10], got "
+                f"Episode {episode_index}: state/action shapes must match [N,{state_size}], got "
                 f"state={state.shape}, action={action.shape}"
             )
             continue
@@ -124,34 +127,27 @@ def main() -> None:
             maxima["action_alignment"] = max(
                 maxima["action_alignment"], float(np.max(np.abs(action[-offset:] - state[-1])))
             )
-        orthogonality, determinant = rotation_quality(np.concatenate([state, action], axis=0))
+        orthogonality, determinant = trajectory_rotation_quality(np.concatenate([state, action], axis=0))
         maxima["rotation_orthogonality"] = max(maxima["rotation_orthogonality"], orthogonality)
         maxima["rotation_determinant"] = max(maxima["rotation_determinant"], determinant)
-        position_steps, rotation_steps = pose10_step_metrics(state)
+        position_steps, rotation_steps = trajectory_step_metrics(state)
         maxima["position_step_m"] = max(
             maxima["position_step_m"], float(np.max(position_steps, initial=0.0))
         )
         maxima["rotation_step_deg"] = max(
             maxima["rotation_step_deg"], float(np.max(rotation_steps, initial=0.0))
         )
-        video_path = episode_path(
-            root,
-            info["video_path"],
-            episode_index,
-            chunks_size,
-            video_key=config["video"]["output_key"],
-        )
-        try:
-            stream = probe_video(video_path, str(config["video"]["ffprobe"]))
-            expected_size = (int(config["video"]["width"]), int(config["video"]["height"]))
-            if (int(stream["width"]), int(stream["height"])) != expected_size:
-                errors.append(f"Episode {episode_index}: video size mismatch: {stream}")
-            if int(stream["nb_read_frames"]) != len(state):
-                errors.append(
-                    f"Episode {episode_index}: video has {stream['nb_read_frames']} frames, parquet has {len(state)}"
-                )
-        except Exception as error:  # keep validating other episodes
-            errors.append(f"Episode {episode_index}: video probe failed: {error}")
+        for video_key in video_keys:
+            video_path = episode_path(root, info["video_path"], episode_index, chunks_size, video_key=video_key)
+            try:
+                stream = probe_video(video_path, str(config["video"]["ffprobe"]))
+                expected_size = (int(config["video"]["width"]), int(config["video"]["height"]))
+                if (int(stream["width"]), int(stream["height"])) != expected_size:
+                    errors.append(f"Episode {episode_index}: {video_key} size mismatch: {stream}")
+                if int(stream["nb_read_frames"]) != len(state):
+                    errors.append(f"Episode {episode_index}: {video_key} has {stream['nb_read_frames']} frames, parquet has {len(state)}")
+            except Exception as error:  # keep validating other episodes
+                errors.append(f"Episode {episode_index}: {video_key} probe failed: {error}")
         print(f"[{number}/{len(episodes)}] validated episode {episode_index:06d}")
 
     if maxima["action_alignment"] > 1e-6:
@@ -179,6 +175,8 @@ def main() -> None:
                 int(info["fps"]),
                 horizon,
                 Path(config["validation"]["openpi_root"]).resolve(),
+                state_size,
+                video_keys,
             )
             loader_status = "passed"
         except Exception as error:

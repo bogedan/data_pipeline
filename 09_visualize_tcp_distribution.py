@@ -16,6 +16,7 @@ from pipeline_common import output_root
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
 from pipeline_common import work_root
+from pipeline_common import trajectory_arm_blocks
 
 
 def episode_color(episode_index: int) -> list[int]:
@@ -23,6 +24,19 @@ def episode_color(episode_index: int) -> list[int]:
     hue = (episode_index * 0.618033988749895) % 1.0
     red, green, blue = colorsys.hsv_to_rgb(hue, 0.72, 1.0)
     return [round(red * 255), round(green * 255), round(blue * 255)]
+
+
+def description_view() -> rrb.TextDocumentView:
+    kwargs = {
+        "origin": "/description",
+        "contents": "/description",
+        "name": "Description",
+        "visible": False,
+    }
+    entity_behavior = getattr(rrb, "EntityBehavior", None)
+    if entity_behavior is not None:
+        kwargs["overrides"] = {"/description": entity_behavior(visible=False)}
+    return rrb.TextDocumentView(**kwargs)
 
 
 def main() -> None:
@@ -78,13 +92,7 @@ def main() -> None:
     rr.init("openpi_all_episode_tcp_distribution", spawn=False)
     blueprint = rrb.Blueprint(
         rrb.Spatial3DView(origin="/world", contents="/world/**", name="TCP trajectories"),
-        rrb.TextDocumentView(
-            origin="/description",
-            contents="/description",
-            name="Description",
-            visible=False,
-            overrides={"/description": rrb.EntityBehavior(visible=False)},
-        ),
+        description_view(),
         auto_views=False,
     )
     rr.save(str(recording_path), default_blueprint=blueprint)
@@ -102,26 +110,25 @@ def main() -> None:
         state = np.asarray(table["observation.state"].combine_chunks().to_pylist(), dtype=np.float32)
         if state.ndim != 2 or state.shape[1] < 3 or len(state) == 0:
             raise ValueError(f"Episode {episode_index} has invalid observation.state shape {state.shape}")
-        xyz = state[:, :3]
-        if not np.all(np.isfinite(xyz)):
+        blocks = trajectory_arm_blocks(state)
+        if not np.all(np.isfinite(state)):
             raise ValueError(f"Episode {episode_index} contains NaN or infinity in TCP positions")
 
         color = episode_color(episode_index)
         entity = f"world/episodes/episode_{episode_index:06d}"
-        rr.log(f"{entity}/points", rr.Points3D(xyz, colors=color, radii=point_radius_m), static=True)
-        if args.with_paths:
-            rr.log(
-                f"{entity}/path",
-                rr.LineStrips3D([xyz], colors=color, radii=path_radius_m),
-                static=True,
-            )
-        rr.log(f"{entity}/start", rr.Points3D(xyz[:1], colors=[255, 255, 255], radii=point_radius_m * 1.8), static=True)
-        rr.log(f"{entity}/end", rr.Points3D(xyz[-1:], colors=[20, 20, 20], radii=point_radius_m * 1.8), static=True)
-
-        total_points += len(xyz)
-        bounds_min = np.minimum(bounds_min, np.min(xyz, axis=0))
-        bounds_max = np.maximum(bounds_max, np.max(xyz, axis=0))
-        print(f"[{number}/{len(episodes)}] episode {episode_index:06d}: {len(xyz)} TCP points")
+        roles = ["right"] if len(blocks) == 1 else ["right", "left"]
+        for role, block in zip(roles, blocks, strict=True):
+            xyz = block[:, :3]
+            arm_entity = f"{entity}/{role}"
+            rr.log(f"{arm_entity}/points", rr.Points3D(xyz, colors=color, radii=point_radius_m), static=True)
+            if args.with_paths:
+                rr.log(f"{arm_entity}/path", rr.LineStrips3D([xyz], colors=color, radii=path_radius_m), static=True)
+            rr.log(f"{arm_entity}/start", rr.Points3D(xyz[:1], colors=[255, 255, 255], radii=point_radius_m * 1.8), static=True)
+            rr.log(f"{arm_entity}/end", rr.Points3D(xyz[-1:], colors=[20, 20, 20], radii=point_radius_m * 1.8), static=True)
+            total_points += len(xyz)
+            bounds_min = np.minimum(bounds_min, np.min(xyz, axis=0))
+            bounds_max = np.maximum(bounds_max, np.max(xyz, axis=0))
+        print(f"[{number}/{len(episodes)}] episode {episode_index:06d}: {len(state)} frames x {len(blocks)} arms")
 
     description = (
         f"Dataset: {dataset}\n\n"

@@ -1,12 +1,22 @@
 # OpenPI UMI 数据处理流水线
 
-这套脚本把现有 LeRobot v2.1 数据转换为当前 `/share/project/lxy/openpi` 的 UMI 输入格式：
+这套脚本根据源数据集 `assets` 中保存的任务 YAML，把 LeRobot v2.1 单臂或双臂数据转换为统一轨迹格式。
+
+单臂输出保持原有契约：
 
 ```text
 observation.state:               float32[10]
 action:                          float32[10]
 observation.images.fisheye_img:  240x240 RGB H.264 video
 task:                            LeRobot task metadata
+```
+
+双臂输出固定按右臂、左臂排列：
+
+```text
+observation.state/action:                 float32[20] (right pose10 + left pose10)
+observation.images.fisheye_img_right:     240x240 RGB H.264 video
+observation.images.fisheye_img_left:      240x240 RGB H.264 video
 ```
 
 10 维轨迹语义为：
@@ -33,9 +43,9 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 03_limit_tcp_steps.py         用原始轨迹的可配置百分位数限制相邻 TCP 位移/旋转
 04_trim_static_segments.py    在处理后轨迹上裁掉首尾长静止段，重建索引/action
 05_sparsify_dense_turns.py    只减少拐弯处空间距离过密的点；直线和夹爪变化帧不删
-06_convert_videos.py          选择主相机，中心裁剪并编码为 240x240 H.264
+06_convert_videos.py          转换 arms 绑定的 MVS 相机并编码为 240x240 H.264
 07_finalize_metadata.py       生成 info、episodes_stats 和全局 stats
-08_validate_openpi.py         验证时序、步长、rot6d、视频和 OpenPI action chunk
+08_validate_openpi.py         手动验证时序、步长、rot6d、视频和 loader（默认不运行）
 09_visualize_tcp_distribution.py  将全部 episode 的 TCP 点云写入一个 Rerun RRD
 ```
 
@@ -43,13 +53,12 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 
 先检查并修改 `config.yaml`，尤其是：
 
-- `source.root`：LeRobot v2.1 源数据集目录；流水线从其 `meta/info.json` 读取标准的
-  `observation.state`，并自动选择唯一的方形视频字段作为 OpenPI 的主相机；
+- `source.root`：LeRobot v2.1 源数据集目录；流水线读取 `assets` 中唯一包含 `robot` 和
+  `dataset` 的任务 YAML，并按 `robot.arms` 解析 pose source、夹爪和 MVS；有多个候选时可设置
+  `source.task_config`；
 - `output.root`：最终数据集目录；中间报告和统计自动写入同级的 `<output.root>_work`；
 - `trajectory.action_offset_frames`：state 与 action 的时间关系；
 - `trajectory.pose_transform.enabled`：是否额外应用一次固定的 tracker→TCP 变换，必须明确填 true/false；
-- `trajectory.gripper_index`：夹爪宽度在 `observation.state` 中的索引；流水线根据该字段名从
-  `source.root/assets/calibration/<gripper_id>.yaml` 自动读取标定；
 - `smoothing.enabled`：是否在硬步长限制前执行局部轨迹平滑；
 - `step_limit.enabled`：是否限制相邻帧 TCP 位移和旋转；
 - `step_limit.percentile`：从未平滑的转换轨迹计算的百分位数，例如 90、95 或 99；
@@ -71,14 +80,14 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 安装轻量处理依赖；OpenPI 自己的环境若已包含这些包，可以直接使用它：
 
 ```bash
-source /share/project/liyuanyuan/anaconda3/bin/activate data_pipeline
+conda activate omniumix_lerobot_v21
 python -m pip install -r requirements.txt
 ```
 
 逐步运行：
 
 ```bash
-source /share/project/liyuanyuan/anaconda3/bin/activate data_pipeline
+conda activate omniumix_lerobot_v21
 set -e
 python 00_inspect_source.py --config config.yaml
 python 01_convert_trajectories.py --config config.yaml
@@ -88,9 +97,11 @@ python 04_trim_static_segments.py --config config.yaml
 python 05_sparsify_dense_turns.py --config config.yaml
 python 06_convert_videos.py --config config.yaml
 python 07_finalize_metadata.py --config config.yaml
-python 08_validate_openpi.py --config config.yaml
 python 09_visualize_tcp_distribution.py --config config.yaml
 ```
+
+`08_validate_openpi.py` 不在默认执行链中。需要额外验证 LeRobot/OpenPI loader 时再手动运行；
+双臂模型侧输入契约应在训练接入阶段单独确认。
 
 也可以使用脚本一次执行完整流水线：
 
@@ -116,7 +127,7 @@ episode 之前失败，可在修复后从该编号继续；若 marker 已显示 
 RRD 使用 `rerun-sdk==0.23.1` 生成；该环境已经安装此版本。重建环境时可执行：
 
 ```bash
-source /share/project/liyuanyuan/anaconda3/bin/activate data_pipeline
+conda activate omniumix_lerobot_v21
 python -m pip install "rerun-sdk==0.23.1"
 rerun --version
 ```
@@ -124,7 +135,7 @@ rerun --version
 启动 Web Viewer：
 
 ```bash
-source /share/project/liyuanyuan/anaconda3/bin/activate data_pipeline
+conda activate omniumix_lerobot_v21
 
 rerun --serve-web \
   --bind=0.0.0.0 \
@@ -172,7 +183,7 @@ ssh -L 9090:localhost:9090 -L 9876:localhost:9876 用户名@服务器地址
 
 ### 首尾静止段裁剪
 
-`trim` 在平滑之后运行，综合 TCP 平移、旋转和夹爪变化检测 episode 离开初始/最终静止
+`trim` 在平滑之后运行，综合所有手臂的 TCP 平移、旋转和夹爪变化检测 episode 离开初始/最终静止
 plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值后，才视为真正开始/结束运动，
 以忽略孤立的跟踪抖动；动作边界前后仍各保留 5 帧。裁剪阶段会：
 
@@ -195,7 +206,7 @@ plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值
 窗口各自移动达到 `min_turn_context_distance_m` 时才相信方向，避免低速噪声制造虚假大角度。
 平稳直线区域从不进入删除候选。
 
-拐弯区域内还必须同时满足以下约束才能删除一个点：相邻点原本过密；删除后 TCP 跳距不超过
+双臂前缀采样使用两臂位移的最大值，任一手臂移动达到阈值就保留帧。拐弯区域内还必须同时满足以下约束才能删除一个点：相邻点原本过密；删除后 TCP 跳距不超过
 `max_kept_step_m`；位置插值误差、SO(3) 旋转插值误差不超阈值；夹爪基本不变；连续删除帧数
 不超上限。每个拐弯区域的最大曲率点强制保留。
 
@@ -209,8 +220,9 @@ plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值
 完全相同的帧并重新编码，把输出重新设为固定 30 Hz；parquet 的 timestamp、
 frame_index、全局 index 和 shifted action 同步重建。
 
-`requirements.txt` 锁定了与 OpenPI 相同 commit 的 LeRobot。默认
-`validation.require_lerobot_loader: true`，所以 `08` 除了检查 parquet、动作时序、最终步长、rot6d、视频
+候选帧只有在每条手臂的位置/旋转插值误差和步长都满足约束、且任一夹爪均未变化时才会删除。
+
+`requirements.txt` 锁定了与 OpenPI 相同 commit 的 LeRobot。手动运行 `08` 时，除了检查 parquet、动作时序、最终步长、rot6d、视频
 帧数和尺寸，还会实际通过 LeRobot loader 读取当前帧、图像和 32 步 action chunk。
 
 建议第一次把 `validation.episode_limit` 设为 `1`，并把 `output.root` 指向单独的 smoke 目录。全部通过后再改回 `null` 处理完整数据。

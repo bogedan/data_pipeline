@@ -10,7 +10,7 @@ import pyarrow.parquet as pq
 from pipeline_common import PIPELINE_MARKER
 from pipeline_common import array_stats
 from pipeline_common import episode_path
-from pipeline_common import find_static_trim_bounds
+from pipeline_common import find_trajectory_trim_bounds
 from pipeline_common import load_config
 from pipeline_common import output_root
 from pipeline_common import read_json
@@ -115,7 +115,7 @@ def main() -> None:
         table = pq.read_table(path, columns=["observation.state"])
         state = np.asarray(table["observation.state"].combine_chunks().to_pylist(), dtype=np.float32)
         try:
-            start, end, details = find_static_trim_bounds(state, **bounds_kwargs)
+            start, end, details = find_trajectory_trim_bounds(state, **bounds_kwargs)
         except ValueError as error:
             raise ValueError(f"Episode {episode_index}: {error}") from error
         plans.append({"path": path, "start": start, "end": end, "details": details})

@@ -7,13 +7,14 @@ import cv2
 import numpy as np
 
 from pipeline_common import PIPELINE_MARKER
-from pipeline_common import POSE_NAMES
 from pipeline_common import episode_path
 from pipeline_common import load_config
 from pipeline_common import merge_stats
 from pipeline_common import output_root
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
+from pipeline_common import output_state_names
+from pipeline_common import resolve_arm_layouts
 from pipeline_common import source_root
 from pipeline_common import work_root
 from pipeline_common import write_json
@@ -104,20 +105,21 @@ def main() -> None:
     if not partial_path.exists():
         raise SystemExit(f"Missing {partial_path}; run the preceding trajectory stages first")
     partial = {row["episode_index"]: row for row in read_jsonl(partial_path)}
-    output_key = config["video"]["output_key"]
+    layouts = resolve_arm_layouts(config, source_info)
     chunks_size = int(config["output"].get("chunks_size", 1000))
     sample_frames = int(config["metadata"].get("video_stats_frames_per_episode", 100))
 
     episode_stats = []
     for number, episode in enumerate(episodes, start=1):
         episode_index = int(episode["episode_index"])
-        video_path = episode_path(
-            output, source_info["video_path"], episode_index, chunks_size, video_key=output_key
-        )
-        if not video_path.exists():
-            raise SystemExit(f"Missing {video_path}; 06_convert_videos.py did not complete successfully")
         stats = partial[episode_index]["stats"]
-        stats[output_key] = sample_video_stats(video_path, sample_frames)
+        for layout in layouts:
+            video_path = episode_path(
+                output, source_info["video_path"], episode_index, chunks_size, video_key=layout.output_video_key
+            )
+            if not video_path.exists():
+                raise SystemExit(f"Missing {video_path}; 06_convert_videos.py did not complete successfully")
+            stats[layout.output_video_key] = sample_video_stats(video_path, sample_frames)
         episode_stats.append({"episode_index": episode_index, "stats": stats})
         print(f"[{number}/{len(episodes)}] metadata episode {episode_index:06d}")
     write_jsonl(output / "meta/episodes_stats.jsonl", episode_stats)
@@ -135,10 +137,10 @@ def main() -> None:
         for key in ("timestamp", "frame_index", "episode_index", "index", "task_index")
         if key in source_info["features"]
     }
-    features = {
-        "observation.state": {"dtype": "float32", "shape": [10], "names": [POSE_NAMES]},
-        "action": {"dtype": "float32", "shape": [10], "names": [POSE_NAMES]},
-        output_key: {
+    state_names = output_state_names(layouts)
+    state_size = len(state_names)
+    video_features = {
+        layout.output_video_key: {
             "dtype": "video",
             "shape": [height, width, 3],
             "names": ["height", "width", "channels"],
@@ -152,7 +154,12 @@ def main() -> None:
                 "video.channels": 3,
                 "has_audio": False,
             },
-        },
+        } for layout in layouts
+    }
+    features = {
+        "observation.state": {"dtype": "float32", "shape": [state_size], "names": [state_names]},
+        "action": {"dtype": "float32", "shape": [state_size], "names": [state_names]},
+        **video_features,
         **scalar_features,
     }
     tasks = read_jsonl(output / "meta/tasks.jsonl")
@@ -162,7 +169,7 @@ def main() -> None:
         "total_episodes": len(episodes),
         "total_frames": total_frames,
         "total_tasks": len(tasks),
-        "total_videos": len(episodes),
+        "total_videos": len(episodes) * len(layouts),
         "total_chunks": (len(episodes) + chunks_size - 1) // chunks_size,
         "chunks_size": chunks_size,
         "fps": int(source_info["fps"]),

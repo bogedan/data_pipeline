@@ -13,13 +13,13 @@ from pipeline_common import array_stats
 from pipeline_common import episode_path
 from pipeline_common import load_config
 from pipeline_common import output_root
-from pipeline_common import pose10_step_metrics
+from pipeline_common import trajectory_step_metrics
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
 from pipeline_common import shifted_actions
 from pipeline_common import source_root
-from pipeline_common import sample_spatial_prefix
-from pipeline_common import sparsify_dense_turns
+from pipeline_common import sample_trajectory_prefix
+from pipeline_common import sparsify_trajectory_turns
 from pipeline_common import work_root
 from pipeline_common import write_json
 from pipeline_common import write_jsonl
@@ -158,12 +158,12 @@ def main() -> None:
         path = episode_path(output, source_info["data_path"], episode_index, chunks_size)
         table = pq.read_table(path, columns=["observation.state"])
         state = np.asarray(table["observation.state"].combine_chunks().to_pylist(), dtype=np.float32)
-        prefix_keep, prefix_details = sample_spatial_prefix(state, **prefix_kwargs)
-        turn_keep_relative, turn_details = sparsify_dense_turns(state[prefix_keep], **kwargs)
+        prefix_keep, prefix_details = sample_trajectory_prefix(state, **prefix_kwargs)
+        turn_keep_relative, turn_details = sparsify_trajectory_turns(state[prefix_keep], **kwargs)
         keep_indices = prefix_keep[turn_keep_relative]
         restored_indices: list[int] = []
         if step_limit_enabled:
-            selected_position_steps, selected_rotation_steps = pose10_step_metrics(state[keep_indices])
+            selected_position_steps, selected_rotation_steps = trajectory_step_metrics(state[keep_indices])
             violating_pairs = np.flatnonzero(
                 (selected_position_steps > position_step_limit_m + 1e-7)
                 | (selected_rotation_steps > rotation_step_limit_deg + 1e-5)
@@ -211,7 +211,7 @@ def main() -> None:
         selected = table.take(pa.array(plan["keep"], type=pa.int64()))
         state = plan["state"][plan["keep"]]
         if step_limit_enabled:
-            position_steps, rotation_steps = pose10_step_metrics(state)
+            position_steps, rotation_steps = trajectory_step_metrics(state)
             if np.max(position_steps, initial=0.0) > position_step_limit_m + 1e-7:
                 raise RuntimeError(f"Episode {plan['episode_index']}: sparsification exceeded the position step limit")
             if np.max(rotation_steps, initial=0.0) > rotation_step_limit_deg + 1e-5:
@@ -223,7 +223,7 @@ def main() -> None:
         temporary.replace(plan["path"])
 
         original_length = len(plan["state"])
-        max_step = float(np.max(np.linalg.norm(np.diff(state[:, :3], axis=0), axis=1), initial=0.0))
+        max_step = float(np.max(trajectory_step_metrics(state)[0], initial=0.0))
         details = {
             "episode_index": plan["episode_index"],
             "original_length": original_length,

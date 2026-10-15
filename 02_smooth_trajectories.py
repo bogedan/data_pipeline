@@ -16,9 +16,10 @@ from pipeline_common import output_root
 from pipeline_common import pose10_rotation_matrix
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
-from pipeline_common import rotation_quality
+from pipeline_common import trajectory_arm_blocks
+from pipeline_common import trajectory_rotation_quality
 from pipeline_common import shifted_actions
-from pipeline_common import smooth_pose10
+from pipeline_common import smooth_trajectory
 from pipeline_common import source_root
 from pipeline_common import work_root
 from pipeline_common import write_json
@@ -51,6 +52,12 @@ def episode_stats(table: pa.Table, state: np.ndarray, action: np.ndarray) -> dic
 
 
 def smoothing_metrics(raw: np.ndarray, smoothed: np.ndarray) -> dict[str, float]:
+    if raw.shape[1] > 10:
+        metrics = [
+            smoothing_metrics(before, after)
+            for before, after in zip(trajectory_arm_blocks(raw), trajectory_arm_blocks(smoothed), strict=True)
+        ]
+        return {key: max(item[key] for item in metrics) for key in metrics[0]}
     position_error = np.linalg.norm(smoothed[:, :3] - raw[:, :3], axis=1)
     raw_rotation = pose10_rotation_matrix(raw)
     smooth_rotation = pose10_rotation_matrix(smoothed)
@@ -137,8 +144,8 @@ def main() -> None:
         path = episode_path(output, source_info["data_path"], episode_index, chunks_size)
         table = pq.read_table(path, columns=["observation.state"])
         raw = np.asarray(table["observation.state"].combine_chunks().to_pylist(), dtype=np.float32)
-        smoothed = smooth_pose10(raw, **kwargs)
-        orthogonality, determinant = rotation_quality(smoothed)
+        smoothed = smooth_trajectory(raw, **kwargs)
+        orthogonality, determinant = trajectory_rotation_quality(smoothed)
         if max(orthogonality, determinant) > 1e-4:
             raise ValueError(
                 f"Episode {episode_index}: invalid smoothed rotations "

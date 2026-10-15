@@ -1,4 +1,5 @@
 import numpy as np
+import yaml
 
 from pipeline_common import quaternion_to_matrix
 from pipeline_common import apply_pose_transform
@@ -10,6 +11,13 @@ from pipeline_common import rotation_quality
 from pipeline_common import sample_spatial_prefix
 from pipeline_common import smooth_pose10
 from pipeline_common import sparsify_dense_turns
+from pipeline_common import ArmLayout
+from pipeline_common import find_trajectory_trim_bounds
+from pipeline_common import output_state_names
+from pipeline_common import resolve_arm_layouts
+from pipeline_common import sample_trajectory_prefix
+from pipeline_common import source_state_to_trajectory
+from pipeline_common import sparsify_trajectory_turns
 
 
 def test_identity_quaternion_uses_matrix_columns() -> None:
@@ -191,6 +199,119 @@ def _identity_pose(length: int) -> np.ndarray:
     pose[:, 3] = 1.0
     pose[:, 7] = 1.0
     return pose
+
+
+def _dual_pose(length: int) -> np.ndarray:
+    return np.concatenate([_identity_pose(length), _identity_pose(length)], axis=1)
+
+
+def test_resolve_dual_arm_layout_is_right_then_left(tmp_path) -> None:
+    root = tmp_path / "dataset"
+    (root / "assets").mkdir(parents=True)
+    task = {
+        "robot": {
+            "arms": {
+                "left": {"pose_source": "tcp_left", "gripper": "gripper_left", "mvs": "left_hand"},
+                "right": {"pose_source": "tcp_right", "gripper": "gripper_right", "mvs": "right_hand"},
+            },
+            "mvs": {"right_hand": {"serial": "R"}, "left_hand": {"serial": "L"}},
+        },
+        "dataset": {"name": "test"},
+    }
+    (root / "assets" / "task.yaml").write_text(yaml.safe_dump(task), encoding="utf-8")
+    names = [f"tcp_right_S.{x}" for x in ("x", "y", "z", "qx", "qy", "qz", "qw")] + ["gripper_right.width_m"]
+    names += [f"tcp_left_S.{x}" for x in ("x", "y", "z", "qx", "qy", "qz", "qw")] + ["gripper_left.width_m"]
+    info = {"features": {"observation.state": {"names": names}, "observation.images.mvs_R": {}, "observation.images.mvs_L": {}}}
+    layouts = resolve_arm_layouts({"source": {"root": str(root)}}, info)
+    assert [layout.role for layout in layouts] == ["right", "left"]
+    assert [layout.output_video_key for layout in layouts] == [
+        "observation.images.fisheye_img_right", "observation.images.fisheye_img_left"
+    ]
+    assert output_state_names(layouts)[0] == "right.x"
+    assert output_state_names(layouts)[10] == "left.x"
+
+
+def test_source_state_conversion_maps_each_arm_and_preserves_minus_one(tmp_path) -> None:
+    calibration_dir = tmp_path / "assets" / "calibration"
+    calibration_dir.mkdir(parents=True)
+    calibration = {
+        "distance": {"observed_min_m": 0.0, "observed_max_m": 0.1},
+        "width_to_rad": {"min_rad": 0.0, "max_rad": 1.0},
+    }
+    for gripper in ("gripper_right", "gripper_left"):
+        (calibration_dir / f"{gripper}.yaml").write_text(yaml.safe_dump(calibration), encoding="utf-8")
+    layouts = [
+        ArmLayout("right", "tcp_right", tuple(range(7)), "gripper_right", 7, "right", "R", "source_r", "output_r"),
+        ArmLayout("left", "tcp_left", tuple(range(8, 15)), "gripper_left", 15, "left", "L", "source_l", "output_l"),
+    ]
+    state = np.zeros((1, 16), dtype=np.float32)
+    state[0, [6, 14]] = 1.0
+    state[0, 7] = 0.05
+    state[0, 15] = -1.0
+    config = {
+        "source": {"root": str(tmp_path)},
+        "trajectory": {
+            "pose_transform": {"enabled": False},
+            "gripper": {"mapping": "linear", "distance_section": "distance", "radians_section": "width_to_rad", "clip": True},
+        },
+    }
+    result = source_state_to_trajectory(state, config, layouts)
+    assert result.shape == (1, 20)
+    np.testing.assert_allclose(result[0, 9], 0.5)
+    np.testing.assert_allclose(result[0, 19], -1.0)
+
+
+def test_dual_trim_combines_arm_activity_and_ignores_disabled_gripper() -> None:
+    trajectory = _dual_pose(100)
+    trajectory[:, [9, 19]] = -1.0
+    trajectory[20:, 0] = 0.1
+    trajectory[80:, 10] = 0.1
+    start, end, _ = find_trajectory_trim_bounds(
+        trajectory, position_threshold_m=0.01, rotation_threshold_deg=3.0,
+        gripper_threshold_rad=0.1, pre_roll_frames=0, post_roll_frames=0,
+        min_episode_frames=20, min_active_frames=3,
+    )
+    assert start == 20
+    assert end == 80
+
+
+def test_dual_trim_keeps_gripper_only_activity() -> None:
+    trajectory = _dual_pose(100)
+    trajectory[20:80, 19] = 0.5
+    start, end, _ = find_trajectory_trim_bounds(
+        trajectory, position_threshold_m=0.01, rotation_threshold_deg=3.0,
+        gripper_threshold_rad=0.1, pre_roll_frames=0, post_roll_frames=0,
+        min_episode_frames=20, min_active_frames=3,
+    )
+    assert start == 20
+    assert end == 80
+
+
+def test_joint_prefix_keeps_frame_when_either_arm_moves() -> None:
+    trajectory = _dual_pose(8)
+    trajectory[:, 10] = np.arange(8) * 0.0011
+    keep, _ = sample_trajectory_prefix(trajectory, prefix_frames=6, min_spacing_m=0.001)
+    np.testing.assert_array_equal(keep[:6], np.arange(6))
+
+
+def test_joint_sparsification_static_arm_does_not_block_moving_turn() -> None:
+    trajectory = _dual_pose(21)
+    angle = np.linspace(0.0, np.pi / 2.0, len(trajectory))
+    trajectory[:, 0] = 0.01 * np.cos(angle)
+    trajectory[:, 1] = 0.01 * np.sin(angle)
+    keep, details = sparsify_trajectory_turns(trajectory, **_turn_sparsification_kwargs())
+    assert len(keep) < len(trajectory)
+    assert details["removed_indices"]
+
+
+def test_joint_sparsification_gripper_change_on_either_arm_protects_frames() -> None:
+    trajectory = _dual_pose(21)
+    angle = np.linspace(0.0, np.pi / 2.0, len(trajectory))
+    trajectory[:, 0] = 0.01 * np.cos(angle)
+    trajectory[:, 1] = 0.01 * np.sin(angle)
+    trajectory[:, 19] = np.linspace(0.0, 1.0, len(trajectory))
+    keep, _ = sparsify_trajectory_turns(trajectory, **_turn_sparsification_kwargs())
+    np.testing.assert_array_equal(keep, np.arange(len(trajectory)))
 
 
 def test_sample_spatial_prefix_enforces_one_mm_and_keeps_suffix() -> None:
