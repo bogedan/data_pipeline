@@ -9,6 +9,8 @@ import pyarrow.parquet as pq
 import rerun as rr
 
 from pipeline_common import PIPELINE_MARKER
+from pipeline_common import FLOAT32_POSITION_STEP_ATOL_M
+from pipeline_common import FLOAT32_ROTATION_STEP_ATOL_DEG
 from pipeline_common import array_stats
 from pipeline_common import episode_path
 from pipeline_common import load_config
@@ -18,6 +20,7 @@ from pipeline_common import read_json
 from pipeline_common import read_jsonl
 from pipeline_common import shifted_actions
 from pipeline_common import source_root
+from pipeline_common import step_limit_tolerances
 from pipeline_common import sample_trajectory_prefix
 from pipeline_common import sparsify_trajectory_turns
 from pipeline_common import work_root
@@ -69,6 +72,27 @@ def episode_stats(table: pa.Table, state: np.ndarray, action: np.ndarray) -> dic
     return stats
 
 
+def assert_step_limits(
+    state: np.ndarray,
+    episode_index: int,
+    allowed_position_step_m: float,
+    allowed_rotation_step_deg: float,
+) -> None:
+    position_steps, rotation_steps = trajectory_step_metrics(state)
+    max_position_step_m = float(np.max(position_steps, initial=0.0))
+    max_rotation_step_deg = float(np.max(rotation_steps, initial=0.0))
+    if max_position_step_m > allowed_position_step_m:
+        raise RuntimeError(
+            f"Episode {episode_index}: sparsification position step "
+            f"{max_position_step_m:.12g} m exceeds allowed {allowed_position_step_m:.12g} m"
+        )
+    if max_rotation_step_deg > allowed_rotation_step_deg:
+        raise RuntimeError(
+            f"Episode {episode_index}: sparsification rotation step "
+            f"{max_rotation_step_deg:.12g} deg exceeds allowed {allowed_rotation_step_deg:.12g} deg"
+        )
+
+
 def write_comparison_rrd(path, original: np.ndarray, keep_indices: np.ndarray, removed_indices: list[int], episode: int) -> None:
     kept = original[keep_indices]
     rr.init("openpi_umi_dense_turn_sparsification", spawn=False)
@@ -107,14 +131,14 @@ def main() -> None:
         raise SystemExit(f"Missing {marker_path}; run the trajectory stages first")
     marker = read_json(marker_path)
     if bool(config.get("smoothing", {}).get("enabled", False)) and marker.get("smoothing_status") != "complete":
-        raise SystemExit("Turn sparsification requires a completed 02_smooth_trajectories.py stage")
+        raise SystemExit("Turn sparsification requires a completed 04_smooth_trajectories.py stage")
     if bool(config.get("step_limit", {}).get("enabled", False)) and marker.get("step_limit_status") != "complete":
-        raise SystemExit("Turn sparsification requires a completed 03_limit_tcp_steps.py stage")
+        raise SystemExit("Turn sparsification requires a completed 05_limit_tcp_steps.py stage")
     if bool(config.get("trim", {}).get("enabled", False)) and marker.get("trim_status") != "complete":
-        raise SystemExit("Turn sparsification requires a completed 04_trim_static_segments.py stage")
+        raise SystemExit("Turn sparsification requires a completed 06_trim_static_segments.py stage")
     if marker.get("turn_sparsification_status") in {"running", "complete"}:
         raise SystemExit(
-            "This output has already entered turn sparsification. Rerun 01_convert_trajectories.py "
+            "This output has already entered turn sparsification. Rerun 03_convert_trajectories.py "
             "with output.overwrite=true before sparsifying again."
         )
 
@@ -142,15 +166,26 @@ def main() -> None:
     }
     step_limit_enabled = bool(config.get("step_limit", {}).get("enabled", False))
     if step_limit_enabled:
-        reference_path = work / "01_step_limit_reference.json"
+        reference_path = work / "03_step_limit_reference.json"
         if not reference_path.exists():
-            raise SystemExit(f"Missing {reference_path}; rerun 01_convert_trajectories.py")
+            raise SystemExit(f"Missing {reference_path}; rerun 03_convert_trajectories.py")
         step_reference = read_json(reference_path)
         position_step_limit_m = float(step_reference["position_limit_m"])
         rotation_step_limit_deg = float(step_reference["rotation_limit_deg"])
+        position_tolerance_m, rotation_tolerance_deg = step_limit_tolerances(config)
+        allowed_position_step_m = (
+            position_step_limit_m + position_tolerance_m + FLOAT32_POSITION_STEP_ATOL_M
+        )
+        allowed_rotation_step_deg = (
+            rotation_step_limit_deg + rotation_tolerance_deg + FLOAT32_ROTATION_STEP_ATOL_DEG
+        )
     else:
         position_step_limit_m = float("inf")
         rotation_step_limit_deg = float("inf")
+        position_tolerance_m = 0.0
+        rotation_tolerance_deg = 0.0
+        allowed_position_step_m = float("inf")
+        allowed_rotation_step_deg = float("inf")
 
     plans: list[dict] = []
     for episode in episodes:
@@ -165,8 +200,8 @@ def main() -> None:
         if step_limit_enabled:
             selected_position_steps, selected_rotation_steps = trajectory_step_metrics(state[keep_indices])
             violating_pairs = np.flatnonzero(
-                (selected_position_steps > position_step_limit_m + 1e-7)
-                | (selected_rotation_steps > rotation_step_limit_deg + 1e-5)
+                (selected_position_steps > allowed_position_step_m)
+                | (selected_rotation_steps > allowed_rotation_step_deg)
             )
             for pair in violating_pairs:
                 restored_indices.extend(
@@ -176,6 +211,12 @@ def main() -> None:
                 keep_indices = np.unique(
                     np.concatenate([keep_indices, np.asarray(restored_indices, dtype=np.int64)])
                 )
+            assert_step_limits(
+                state[keep_indices],
+                episode_index,
+                allowed_position_step_m,
+                allowed_rotation_step_deg,
+            )
         keep_set = set(keep_indices.tolist())
         prefix_removed_indices = [
             int(index) for index in prefix_details["prefix_removed_indices"] if index not in keep_set
@@ -211,11 +252,12 @@ def main() -> None:
         selected = table.take(pa.array(plan["keep"], type=pa.int64()))
         state = plan["state"][plan["keep"]]
         if step_limit_enabled:
-            position_steps, rotation_steps = trajectory_step_metrics(state)
-            if np.max(position_steps, initial=0.0) > position_step_limit_m + 1e-7:
-                raise RuntimeError(f"Episode {plan['episode_index']}: sparsification exceeded the position step limit")
-            if np.max(rotation_steps, initial=0.0) > rotation_step_limit_deg + 1e-5:
-                raise RuntimeError(f"Episode {plan['episode_index']}: sparsification exceeded the rotation step limit")
+            assert_step_limits(
+                state,
+                plan["episode_index"],
+                allowed_position_step_m,
+                allowed_rotation_step_deg,
+            )
         action = shifted_actions(state, offset, tail_policy)
         converted = replace_columns(selected, state=state, action=action, fps=fps, global_start_index=global_index)
         temporary = plan["path"].with_suffix(".sparsified.parquet.tmp")
@@ -239,7 +281,7 @@ def main() -> None:
         global_index += len(converted)
         if plan["episode_index"] == visualization_episode:
             write_comparison_rrd(
-                work / "05_turn_sparsification_comparison.rrd",
+                work / "07_turn_sparsification_comparison.rrd",
                 plan["state"],
                 plan["keep"],
                 plan["details"]["removed_indices"],
@@ -251,8 +293,8 @@ def main() -> None:
             f"{original_length} -> {len(converted)} (-{details['removed_frames']})"
         )
 
-    write_jsonl(work / "05_turn_sparsification_manifest.jsonl", manifest)
-    write_jsonl(work / "05_partial_episode_stats.jsonl", partial_stats)
+    write_jsonl(work / "07_turn_sparsification_manifest.jsonl", manifest)
+    write_jsonl(work / "07_partial_episode_stats.jsonl", partial_stats)
     write_jsonl(episodes_path, converted_episodes)
     report = {
         "episodes": len(manifest),
@@ -263,15 +305,17 @@ def main() -> None:
         "turn_regions": sum(int(item["turn_regions"]) for item in manifest),
         "prefix_removed_frames": sum(len(item["prefix_removed_indices"]) for item in manifest),
         "step_limit_restored_frames": sum(len(item["step_limit_restored_indices"]) for item in manifest),
+        "step_limit_position_tolerance_mm": position_tolerance_m * 1000.0,
+        "step_limit_rotation_tolerance_deg": rotation_tolerance_deg,
         "prefix_parameters": prefix_kwargs,
         "parameters": kwargs,
-        "visualization": str(work / "05_turn_sparsification_comparison.rrd") if visualization_written else None,
+        "visualization": str(work / "07_turn_sparsification_comparison.rrd") if visualization_written else None,
     }
     report["removal_fraction"] = report["removed_frames"] / max(report["frames_before"], 1)
-    write_json(work / "05_turn_sparsification_report.json", report)
+    write_json(work / "07_turn_sparsification_report.json", report)
     marker = read_json(marker_path)
     marker["turn_sparsification_status"] = "complete"
-    marker["turn_sparsification_report"] = str(work / "05_turn_sparsification_report.json")
+    marker["turn_sparsification_report"] = str(work / "07_turn_sparsification_report.json")
     write_json(marker_path, marker)
     print(f"Sparsified {report['frames_before']} -> {report['frames_after']} frames")
 

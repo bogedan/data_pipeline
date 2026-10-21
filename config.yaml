@@ -1,16 +1,37 @@
-# Source LeRobot v2.1 dataset.
+preprocessing:
+  merge:
+    enabled: true
+    discover:
+      directory: /home/xcr/pbg/omniumix_lerobot/datasets
+      dataset_name: pick_and_place_with_two_hands_cup_rod
+      date: "20261019"
+
+    # 使用手动路径时，注释掉 discover，并取消下面 inputs 的注释。
+    # inputs:
+    #   - /path/to/dataset_1
+    #   - /path/to/dataset_2
+
+    output: /home/xcr/pbg/omniumix_lerobot/datasets/pick_and_place_with_two_hands_cup_rod_20261019_merged
+    overwrite: false
+
+  add_gripper_width:
+    enabled: true
+    mode: overwrite
+    output: /home/xcr/pbg/omniumix_lerobot/datasets/pick_and_place_with_two_hands_cup_rod_20261019_merged_width
+    overwrite: false
+
 source:
-  root: /share/project/lxy/test_20261003_155718_width
+  root: null
 
 output:
-  root: /share/project/lxy/test_20261003_155718_openpi_final
+  root: /home/xcr/pbg/omniumix_lerobot/datasets/pick_and_place_with_two_hands_cup_rod_20261019_merged_openpi
   chunks_size: 1000
-  # 01 only removes an existing output when it contains this pipeline's marker.
+  # 03 only removes an existing output when it contains this pipeline's marker.
   overwrite: true
 
 task:
   # null preserves source tasks. A string replaces all episode tasks and task_index values.
-  prompt: "Pick up the red cup and place it on the yellow plate."
+  prompt: null
 
 trajectory:
   # The collection pipeline already applied the tracker->TCP transform.
@@ -60,8 +81,10 @@ smoothing:
 # Compute this percentile from the converted trajectories before smoothing,
 # then enforce the fixed adjacent-step limits after smoothing.
 step_limit:
-  enabled: true
+  enabled: false
   percentile: 95.0
+  position_tolerance_mm: 0.01
+  rotation_tolerance_deg: 0.01
   preserve_endpoint_frames: 1
   max_sweeps: 3000
   storage_margin: 0.999

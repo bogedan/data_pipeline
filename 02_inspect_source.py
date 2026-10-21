@@ -125,7 +125,7 @@ def main() -> None:
         "errors": errors,
         "warnings": warnings,
     }
-    report_path = work_root(config) / "00_inspection.json"
+    report_path = work_root(config) / "02_inspection.json"
     write_json(report_path, report)
     print(f"Inspection report: {report_path}")
     for warning in warnings:

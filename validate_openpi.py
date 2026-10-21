@@ -10,12 +10,15 @@ import sys
 import numpy as np
 import pyarrow.parquet as pq
 
+from pipeline_common import FLOAT32_POSITION_STEP_ATOL_M
+from pipeline_common import FLOAT32_ROTATION_STEP_ATOL_DEG
 from pipeline_common import episode_path
 from pipeline_common import load_config
 from pipeline_common import output_root
 from pipeline_common import trajectory_step_metrics
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
+from pipeline_common import step_limit_tolerances
 from pipeline_common import trajectory_rotation_quality
 from pipeline_common import work_root
 from pipeline_common import write_json
@@ -69,14 +72,27 @@ def validate_lerobot_loader(root: Path, fps: int, horizon: int, openpi_root: Pat
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Validate the converted dataset and OpenPI action chunks.")
-    parser.add_argument("--config", default="config.yaml")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Validate a completed OpenPI dataset: metadata, state/action alignment, "
+            "TCP steps, rotations, videos, and the LeRobot action-chunk loader."
+        ),
+        epilog=(
+            "Run 09_finalize_metadata.py before this command. The validation report is written to "
+            "<output.root>_work/validation_report.json."
+        ),
+    )
+    parser.add_argument(
+        "--config",
+        default="config.yaml",
+        help="Pipeline YAML used to build the dataset (default: config.yaml)",
+    )
     args = parser.parse_args()
     config = load_config(args.config)
     root = output_root(config)
     info_path = root / "meta/info.json"
     if not info_path.exists():
-        raise SystemExit(f"Missing {info_path}; run 07_finalize_metadata.py successfully before validation")
+        raise SystemExit(f"Missing {info_path}; run 09_finalize_metadata.py successfully before validation")
     info = read_json(info_path)
     episodes = read_jsonl(root / "meta/episodes.jsonl")
     chunks_size = int(info["chunks_size"])
@@ -91,12 +107,19 @@ def main() -> None:
     }
     step_limit_enabled = bool(config.get("step_limit", {}).get("enabled", False))
     if step_limit_enabled:
-        reference_path = work_root(config) / "01_step_limit_reference.json"
+        reference_path = work_root(config) / "03_step_limit_reference.json"
         if not reference_path.exists():
             raise SystemExit(f"Missing {reference_path}; rerun the trajectory stages")
         step_reference = read_json(reference_path)
         position_step_limit_m = float(step_reference["position_limit_m"])
         rotation_step_limit_deg = float(step_reference["rotation_limit_deg"])
+        position_tolerance_m, rotation_tolerance_deg = step_limit_tolerances(config)
+        allowed_position_step_m = (
+            position_step_limit_m + position_tolerance_m + FLOAT32_POSITION_STEP_ATOL_M
+        )
+        allowed_rotation_step_deg = (
+            rotation_step_limit_deg + rotation_tolerance_deg + FLOAT32_ROTATION_STEP_ATOL_DEG
+        )
 
     state_size = int(info["features"]["observation.state"]["shape"][0])
     video_keys = sorted(key for key, value in info["features"].items() if value.get("dtype") == "video")
@@ -155,15 +178,17 @@ def main() -> None:
     if maxima["rotation_orthogonality"] > 1e-5 or maxima["rotation_determinant"] > 1e-5:
         errors.append(f"Invalid rot6d geometry: {maxima}")
     if step_limit_enabled:
-        if maxima["position_step_m"] > position_step_limit_m + 1e-7:
+        if maxima["position_step_m"] > allowed_position_step_m:
             errors.append(
                 f"Final TCP position step {maxima['position_step_m']} m exceeds "
-                f"P{float(step_reference['percentile']):g} limit {position_step_limit_m} m"
+                f"allowed {allowed_position_step_m} m (P{float(step_reference['percentile']):g} "
+                f"limit {position_step_limit_m} m plus configured tolerance)"
             )
-        if maxima["rotation_step_deg"] > rotation_step_limit_deg + 1e-5:
+        if maxima["rotation_step_deg"] > allowed_rotation_step_deg:
             errors.append(
                 f"Final TCP rotation step {maxima['rotation_step_deg']} deg exceeds "
-                f"P{float(step_reference['percentile']):g} limit {rotation_step_limit_deg} deg"
+                f"allowed {allowed_rotation_step_deg} deg (P{float(step_reference['percentile']):g} "
+                f"limit {rotation_step_limit_deg} deg plus configured tolerance)"
             )
 
     loader_status = "skipped"
@@ -191,7 +216,7 @@ def main() -> None:
         "lerobot_loader": loader_status,
         "errors": errors,
     }
-    report_path = work_root(config) / "08_validation.json"
+    report_path = work_root(config) / "validation_report.json"
     write_json(report_path, report)
     print(f"Validation report: {report_path}")
     if errors:

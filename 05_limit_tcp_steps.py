@@ -9,6 +9,8 @@ import pyarrow.parquet as pq
 import rerun as rr
 
 from pipeline_common import PIPELINE_MARKER
+from pipeline_common import FLOAT32_POSITION_STEP_ATOL_M
+from pipeline_common import FLOAT32_ROTATION_STEP_ATOL_DEG
 from pipeline_common import array_stats
 from pipeline_common import episode_path
 from pipeline_common import limit_trajectory_steps
@@ -20,6 +22,7 @@ from pipeline_common import read_jsonl
 from pipeline_common import trajectory_rotation_quality
 from pipeline_common import shifted_actions
 from pipeline_common import source_root
+from pipeline_common import step_limit_tolerances
 from pipeline_common import work_root
 from pipeline_common import write_json
 from pipeline_common import write_jsonl
@@ -90,31 +93,33 @@ def main() -> None:
     output, source, work = output_root(config), source_root(config), work_root(config)
     marker_path = output / PIPELINE_MARKER
     if not marker_path.exists():
-        raise SystemExit(f"Missing {marker_path}; run 01_convert_trajectories.py first")
+        raise SystemExit(f"Missing {marker_path}; run 03_convert_trajectories.py first")
     marker = read_json(marker_path)
     if bool(config.get("smoothing", {}).get("enabled", False)) and marker.get("smoothing_status") != "complete":
-        raise SystemExit("Step limiting requires a completed 02_smooth_trajectories.py stage")
+        raise SystemExit("Step limiting requires a completed 04_smooth_trajectories.py stage")
     if marker.get("step_limit_status") in {"running", "complete"}:
         raise SystemExit(
-            "This output has already entered step limiting. Rerun 01_convert_trajectories.py "
+            "This output has already entered step limiting. Rerun 03_convert_trajectories.py "
             "with output.overwrite=true before limiting again."
         )
 
     percentile = float(settings.get("percentile", 95.0))
     if not 0.0 < percentile < 100.0:
         raise ValueError("step_limit.percentile must be greater than 0 and less than 100")
-    reference_path = work / "01_step_limit_reference.json"
+    reference_path = work / "03_step_limit_reference.json"
     if not reference_path.exists():
-        raise SystemExit(f"Missing {reference_path}; rerun 01_convert_trajectories.py")
+        raise SystemExit(f"Missing {reference_path}; rerun 03_convert_trajectories.py")
     reference = read_json(reference_path)
     if not np.isclose(float(reference["percentile"]), percentile, atol=1e-12, rtol=0.0):
         raise ValueError(
             f"Configured percentile P{percentile:g} does not match the converted reference "
-            f"P{float(reference['percentile']):g}; rerun 01_convert_trajectories.py"
+            f"P{float(reference['percentile']):g}; rerun 03_convert_trajectories.py"
         )
     storage_margin = float(settings.get("storage_margin", 0.999))
     if not 0.0 < storage_margin <= 1.0:
         raise ValueError("step_limit.storage_margin must be greater than 0 and at most 1")
+    position_tolerance_m, rotation_tolerance_deg = step_limit_tolerances(config)
+    position_tolerance_mm = position_tolerance_m * 1000.0
     position_reference_m = float(reference["position_limit_m"])
     rotation_reference_deg = float(reference["rotation_limit_deg"])
     position_limit_m = position_reference_m * storage_margin
@@ -122,6 +127,8 @@ def main() -> None:
     kwargs = {
         "position_limit_m": position_limit_m,
         "rotation_limit_deg": rotation_limit_deg,
+        "position_tolerance_m": position_tolerance_m,
+        "rotation_tolerance_deg": rotation_tolerance_deg,
         "preserve_endpoint_frames": int(settings.get("preserve_endpoint_frames", 1)),
         "max_sweeps": int(settings.get("max_sweeps", 3000)),
     }
@@ -149,9 +156,15 @@ def main() -> None:
                 f"(orthogonality={orthogonality}, determinant={determinant})"
             )
         after_position, after_rotation = trajectory_step_metrics(limited)
-        if np.max(after_position, initial=0.0) > position_reference_m + 1e-7:
+        if (
+            np.max(after_position, initial=0.0)
+            > position_reference_m + position_tolerance_m + FLOAT32_POSITION_STEP_ATOL_M
+        ):
             raise RuntimeError(f"Episode {episode_index}: position limit was not satisfied after float32 storage")
-        if np.max(after_rotation, initial=0.0) > rotation_reference_deg + 1e-5:
+        if (
+            np.max(after_rotation, initial=0.0)
+            > rotation_reference_deg + rotation_tolerance_deg + FLOAT32_ROTATION_STEP_ATOL_DEG
+        ):
             raise RuntimeError(f"Episode {episode_index}: rotation limit was not satisfied after float32 storage")
         plans.append(
             {
@@ -202,7 +215,7 @@ def main() -> None:
         )
         if plan["episode_index"] == visualization_episode:
             write_comparison_rrd(
-                work / "03_step_limit_comparison.rrd",
+                work / "05_step_limit_comparison.rrd",
                 plan["before"],
                 plan["limited"],
                 plan["episode_index"],
@@ -216,14 +229,16 @@ def main() -> None:
             f"{details['max_rotation_step_deg']:.3f} deg"
         )
 
-    write_jsonl(work / "03_step_limit_manifest.jsonl", manifest)
-    write_jsonl(work / "03_partial_episode_stats.jsonl", partial_stats)
+    write_jsonl(work / "05_step_limit_manifest.jsonl", manifest)
+    write_jsonl(work / "05_partial_episode_stats.jsonl", partial_stats)
     report = {
         "episodes": len(manifest),
         "frames": sum(int(item["frames"]) for item in manifest),
         "percentile": percentile,
         "raw_reference": reference,
         "storage_margin": storage_margin,
+        "position_tolerance_mm": position_tolerance_mm,
+        "rotation_tolerance_deg": rotation_tolerance_deg,
         "applied_position_limit_m": position_limit_m,
         "applied_rotation_limit_deg": rotation_limit_deg,
         "position_steps_over_reference_before": sum(
@@ -238,9 +253,9 @@ def main() -> None:
         "max_rotation_step_after_deg": max(
             (float(item["max_rotation_step_deg"]) for item in manifest), default=0.0
         ),
-        "visualization": str(work / "03_step_limit_comparison.rrd") if visualization_written else None,
+        "visualization": str(work / "05_step_limit_comparison.rrd") if visualization_written else None,
     }
-    report_path = work / "03_step_limit_report.json"
+    report_path = work / "05_step_limit_report.json"
     write_json(report_path, report)
     marker = read_json(marker_path)
     marker["step_limit_status"] = "complete"
@@ -248,8 +263,10 @@ def main() -> None:
     write_json(marker_path, marker)
     print(
         f"Limited {report['episodes']} episodes using raw P{percentile:g}: "
-        f"position <= {position_reference_m * 1000:.3f} mm, "
-        f"rotation <= {rotation_reference_deg:.3f} deg"
+        f"position <= {position_reference_m * 1000:.3f} mm "
+        f"(+{position_tolerance_mm:g} mm tolerance), "
+        f"rotation <= {rotation_reference_deg:.3f} deg "
+        f"(+{rotation_tolerance_deg:g} deg tolerance)"
     )
 
 

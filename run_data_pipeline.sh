@@ -22,15 +22,17 @@ echo "Python: $(command -v "${python_bin}")"
 cd "${script_dir}"
 
 stages=(
-  00_inspect_source.py
-  01_convert_trajectories.py
-  02_smooth_trajectories.py
-  03_limit_tcp_steps.py
-  04_trim_static_segments.py
-  05_sparsify_dense_turns.py
-  06_convert_videos.py
-  07_finalize_metadata.py
-  09_visualize_tcp_distribution.py
+  00_merge_datasets.py
+  01_add_gripper_width.py
+  02_inspect_source.py
+  03_convert_trajectories.py
+  04_smooth_trajectories.py
+  05_limit_tcp_steps.py
+  06_trim_static_segments.py
+  07_sparsify_dense_turns.py
+  08_convert_videos.py
+  09_finalize_metadata.py
+  10_visualize_tcp_distribution.py
 )
 
 for stage in "${stages[@]}"; do

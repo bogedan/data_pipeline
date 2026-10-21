@@ -25,6 +25,8 @@ POSE_NAMES = [
 ARM_ORDER = ("right", "left")
 POSE_SIZE = 10
 PIPELINE_MARKER = ".openpi_data_pipeline.json"
+FLOAT32_POSITION_STEP_ATOL_M = 5e-7
+FLOAT32_ROTATION_STEP_ATOL_DEG = 1e-5
 
 
 @dataclass(frozen=True)
@@ -50,8 +52,30 @@ def load_config(path: str | Path) -> dict[str, Any]:
     return config
 
 
+def step_limit_tolerances(config: dict[str, Any]) -> tuple[float, float]:
+    settings = config.get("step_limit", {})
+    position_tolerance_mm = float(settings.get("position_tolerance_mm", 0.01))
+    rotation_tolerance_deg = float(settings.get("rotation_tolerance_deg", 0.01))
+    if not math.isfinite(position_tolerance_mm) or position_tolerance_mm < 0.0:
+        raise ValueError("step_limit.position_tolerance_mm must be finite and non-negative")
+    if not math.isfinite(rotation_tolerance_deg) or rotation_tolerance_deg < 0.0:
+        raise ValueError("step_limit.rotation_tolerance_deg must be finite and non-negative")
+    return position_tolerance_mm / 1000.0, rotation_tolerance_deg
+
+
 def source_root(config: dict[str, Any]) -> Path:
-    return Path(config["source"]["root"]).expanduser().resolve()
+    preprocessing = config.get("preprocessing", {})
+    width = preprocessing.get("add_gripper_width", {}) if isinstance(preprocessing, dict) else {}
+    merge = preprocessing.get("merge", {}) if isinstance(preprocessing, dict) else {}
+    if isinstance(width, dict) and width.get("enabled") is True:
+        value = width.get("output")
+    elif isinstance(merge, dict) and merge.get("enabled") is True:
+        value = merge.get("output")
+    else:
+        value = config.get("source", {}).get("root")
+    if not value:
+        raise ValueError("source.root is required when dataset preprocessing is disabled")
+    return Path(value).expanduser().resolve()
 
 
 def source_feature_keys(info: dict[str, Any]) -> tuple[str, list[str]]:
@@ -481,6 +505,8 @@ def limit_pose10_steps(
     *,
     position_limit_m: float,
     rotation_limit_deg: float,
+    position_tolerance_m: float = 0.0,
+    rotation_tolerance_deg: float = 0.0,
     preserve_endpoint_frames: int = 1,
     max_sweeps: int = 3000,
 ) -> tuple[np.ndarray, dict[str, float | int]]:
@@ -496,6 +522,10 @@ def limit_pose10_steps(
         raise ValueError("position_limit_m must be finite and positive")
     if not math.isfinite(rotation_limit_deg) or not 0 < rotation_limit_deg <= 180:
         raise ValueError("rotation_limit_deg must be finite, positive, and at most 180")
+    if not math.isfinite(position_tolerance_m) or position_tolerance_m < 0:
+        raise ValueError("position_tolerance_m must be finite and non-negative")
+    if not math.isfinite(rotation_tolerance_deg) or rotation_tolerance_deg < 0:
+        raise ValueError("rotation_tolerance_deg must be finite and non-negative")
     if preserve_endpoint_frames < 1:
         raise ValueError("preserve_endpoint_frames must be at least 1")
     if max_sweeps < 1:
@@ -513,8 +543,11 @@ def limit_pose10_steps(
     fixed[:preserve] = True
     fixed[-preserve:] = True
 
+    position_convergence_atol_m = max(position_tolerance_m, 1e-9)
+    rotation_convergence_atol_deg = max(rotation_tolerance_deg, 1e-7)
     position = pose10[:, :3].astype(np.float64).copy()
     position_sweeps = 0
+    max_position_step_m = float(np.max(np.linalg.norm(np.diff(position, axis=0), axis=1), initial=0.0))
     for sweep in range(max_sweeps):
         for parity in (0, 1):
             indices = np.arange(parity, len(position) - 1, 2)
@@ -536,13 +569,20 @@ def limit_pose10_steps(
             position[indices] += correction * left_weight[:, None]
             position[indices + 1] -= correction * right_weight[:, None]
         position_sweeps = sweep + 1
-        if np.max(np.linalg.norm(np.diff(position, axis=0), axis=1)) <= position_limit_m + 1e-10:
+        max_position_step_m = float(np.max(np.linalg.norm(np.diff(position, axis=0), axis=1), initial=0.0))
+        if max_position_step_m <= position_limit_m + position_convergence_atol_m:
             break
     else:
-        raise RuntimeError(f"Position step limiting did not converge after {max_sweeps} sweeps")
+        excess_m = max(0.0, max_position_step_m - position_limit_m)
+        raise RuntimeError(
+            f"Position step limiting did not converge after {max_sweeps} sweeps "
+            f"(max={max_position_step_m:.12g} m, limit={position_limit_m:.12g} m, "
+            f"excess={excess_m:.3g} m)"
+        )
 
     quaternion = rotation_matrix_to_quaternion(pose10_rotation_matrix(pose10))
     rotation_sweeps = 0
+    max_rotation_step_deg = float(np.max(quaternion_angles_deg(quaternion), initial=0.0))
     for sweep in range(max_sweeps):
         for parity in (0, 1):
             indices = np.arange(parity, len(quaternion) - 1, 2)
@@ -566,10 +606,16 @@ def limit_pose10_steps(
             quaternion[indices] = slerp_quaternions(left, right, excess_fraction * left_weight)
             quaternion[indices + 1] = slerp_quaternions(right, left, excess_fraction * right_weight)
         rotation_sweeps = sweep + 1
-        if np.max(quaternion_angles_deg(quaternion), initial=0.0) <= rotation_limit_deg + 1e-8:
+        max_rotation_step_deg = float(np.max(quaternion_angles_deg(quaternion), initial=0.0))
+        if max_rotation_step_deg <= rotation_limit_deg + rotation_convergence_atol_deg:
             break
     else:
-        raise RuntimeError(f"Rotation step limiting did not converge after {max_sweeps} sweeps")
+        excess_deg = max(0.0, max_rotation_step_deg - rotation_limit_deg)
+        raise RuntimeError(
+            f"Rotation step limiting did not converge after {max_sweeps} sweeps "
+            f"(max={max_rotation_step_deg:.12g} deg, limit={rotation_limit_deg:.12g} deg, "
+            f"excess={excess_deg:.3g} deg)"
+        )
 
     rotation = quaternion_to_matrix(quaternion)
     result = pose10.copy()
@@ -578,15 +624,25 @@ def limit_pose10_steps(
     result[:, 9] = pose10[:, 9]
     result[fixed] = pose10[fixed]
     position_steps, rotation_steps = pose10_step_metrics(result)
-    if np.max(position_steps, initial=0.0) > position_limit_m + 1e-7:
-        raise RuntimeError("Float32 position output exceeds the configured step limit")
-    if np.max(rotation_steps, initial=0.0) > rotation_limit_deg + 1e-5:
-        raise RuntimeError("Float32 rotation output exceeds the configured step limit")
+    stored_position_max = float(np.max(position_steps, initial=0.0))
+    stored_rotation_max = float(np.max(rotation_steps, initial=0.0))
+    if stored_position_max > position_limit_m + position_tolerance_m + FLOAT32_POSITION_STEP_ATOL_M:
+        raise RuntimeError(
+            "Float32 position output exceeds the configured step limit "
+            f"(max={stored_position_max:.12g} m, limit={position_limit_m:.12g} m, "
+            f"tolerance={position_tolerance_m:.12g} m)"
+        )
+    if stored_rotation_max > rotation_limit_deg + rotation_tolerance_deg + FLOAT32_ROTATION_STEP_ATOL_DEG:
+        raise RuntimeError(
+            "Float32 rotation output exceeds the configured step limit "
+            f"(max={stored_rotation_max:.12g} deg, limit={rotation_limit_deg:.12g} deg, "
+            f"tolerance={rotation_tolerance_deg:.12g} deg)"
+        )
     return result, {
         "position_sweeps": position_sweeps,
         "rotation_sweeps": rotation_sweeps,
-        "max_position_step_m": float(np.max(position_steps, initial=0.0)),
-        "max_rotation_step_deg": float(np.max(rotation_steps, initial=0.0)),
+        "max_position_step_m": stored_position_max,
+        "max_rotation_step_deg": stored_rotation_max,
     }
 
 

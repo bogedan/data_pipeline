@@ -18,6 +18,7 @@ from pipeline_common import resolve_arm_layouts
 from pipeline_common import sample_trajectory_prefix
 from pipeline_common import source_state_to_trajectory
 from pipeline_common import sparsify_trajectory_turns
+from pipeline_common import step_limit_tolerances
 
 
 def test_identity_quaternion_uses_matrix_columns() -> None:
@@ -178,6 +179,76 @@ def test_limit_pose10_steps_rejects_violating_fixed_frames() -> None:
         assert "Fixed endpoint frames" in str(error)
     else:
         raise AssertionError("Expected an infeasible fixed endpoint pair to be rejected")
+
+
+def test_limit_pose10_steps_accepts_sub_nanometre_convergence_residual() -> None:
+    rng = np.random.default_rng(1)
+    pose = _identity_pose(20)
+    pose[:, :3] = np.cumsum(rng.normal(size=(20, 3)) * 0.015, axis=0)
+
+    result, details = limit_pose10_steps(
+        pose,
+        position_limit_m=0.02,
+        rotation_limit_deg=1.0,
+        preserve_endpoint_frames=1,
+        max_sweeps=14,
+    )
+
+    position_steps, _ = pose10_step_metrics(result)
+    assert np.max(position_steps) <= 0.02 + 1e-7
+    assert details["position_sweeps"] == 14
+
+
+def test_limit_pose10_steps_uses_configured_position_tolerance() -> None:
+    rng = np.random.default_rng(1)
+    pose = _identity_pose(20)
+    pose[:, :3] = np.cumsum(rng.normal(size=(20, 3)) * 0.015, axis=0)
+
+    result, details = limit_pose10_steps(
+        pose,
+        position_limit_m=0.02,
+        rotation_limit_deg=1.0,
+        position_tolerance_m=1e-5,
+        preserve_endpoint_frames=1,
+        max_sweeps=14,
+    )
+
+    position_steps, _ = pose10_step_metrics(result)
+    assert np.max(position_steps) <= 0.02 + 1e-5 + 5e-7
+    assert details["position_sweeps"] < 14
+
+
+def test_limit_pose10_steps_uses_configured_rotation_tolerance() -> None:
+    pose = _identity_pose(20)
+    angles_deg = np.linspace(0.0, 18.0, len(pose))
+    angles_deg[1:-1:2] += 0.2
+    angles = np.deg2rad(angles_deg)
+    pose[:, 3] = np.cos(angles)
+    pose[:, 4] = np.sin(angles)
+    pose[:, 6] = -np.sin(angles)
+    pose[:, 7] = np.cos(angles)
+
+    result, details = limit_pose10_steps(
+        pose,
+        position_limit_m=0.02,
+        rotation_limit_deg=1.0,
+        rotation_tolerance_deg=0.01,
+        preserve_endpoint_frames=1,
+        max_sweeps=100,
+    )
+
+    _, rotation_steps = pose10_step_metrics(result)
+    assert np.max(rotation_steps) <= 1.0 + 0.01 + 1e-5
+    assert details["rotation_sweeps"] < 100
+
+
+def test_step_limit_tolerances_convert_millimetres_to_metres() -> None:
+    position_m, rotation_deg = step_limit_tolerances(
+        {"step_limit": {"position_tolerance_mm": 0.01, "rotation_tolerance_deg": 0.02}}
+    )
+
+    assert position_m == 1e-5
+    assert rotation_deg == 0.02
 
 
 def _turn_sparsification_kwargs() -> dict:

@@ -144,7 +144,7 @@ def main() -> None:
             raise ValueError(
                 "The configured step-limit percentile produced a non-positive position or rotation limit"
             )
-        reference_path = work / "01_step_limit_reference.json"
+        reference_path = work / "03_step_limit_reference.json"
         write_json(
             reference_path,
             {
@@ -165,7 +165,7 @@ def main() -> None:
             f"rotation={rotation_limit_deg:.3f} deg"
         )
 
-    write_jsonl(work / "01_partial_episode_stats.jsonl", partial_stats)
+    write_jsonl(work / "03_partial_episode_stats.jsonl", partial_stats)
     write_jsonl(output / "meta/episodes.jsonl", converted_episodes)
     prompt = config["task"].get("prompt")
     if prompt is None:
@@ -173,7 +173,7 @@ def main() -> None:
     else:
         write_jsonl(output / "meta/tasks.jsonl", [{"task_index": 0, "task": prompt}])
     write_json(
-        work / "01_trajectory_report.json",
+        work / "03_trajectory_report.json",
         {
             "episodes": len(converted_episodes),
             "frames": sum(item["length"] for item in converted_episodes),

@@ -77,7 +77,7 @@ def main() -> None:
     source, output, work = source_root(config), output_root(config), work_root(config)
     episodes_path = output / "meta/episodes.jsonl"
     if not episodes_path.exists():
-        raise SystemExit(f"Missing {episodes_path}; run 01_convert_trajectories.py first")
+        raise SystemExit(f"Missing {episodes_path}; run 03_convert_trajectories.py first")
     source_info = read_json(source / "meta/info.json")
     if "robot_type" not in source_info:
         raise ValueError(f"Source dataset metadata has no robot_type: {source / 'meta/info.json'}")
@@ -85,22 +85,22 @@ def main() -> None:
     marker = read_json(output / PIPELINE_MARKER)
     if bool(config.get("turn_sparsification", {}).get("enabled", False)):
         if marker.get("turn_sparsification_status") != "complete":
-            raise SystemExit("Metadata finalization requires a completed 05_sparsify_dense_turns.py stage")
-        partial_name = "05_partial_episode_stats.jsonl"
+            raise SystemExit("Metadata finalization requires a completed 07_sparsify_dense_turns.py stage")
+        partial_name = "07_partial_episode_stats.jsonl"
     elif bool(config.get("trim", {}).get("enabled", False)):
         if marker.get("trim_status") != "complete":
-            raise SystemExit("Metadata finalization requires a completed 04_trim_static_segments.py stage")
-        partial_name = "04_partial_episode_stats.jsonl"
+            raise SystemExit("Metadata finalization requires a completed 06_trim_static_segments.py stage")
+        partial_name = "06_partial_episode_stats.jsonl"
     elif bool(config.get("step_limit", {}).get("enabled", False)):
         if marker.get("step_limit_status") != "complete":
-            raise SystemExit("Metadata finalization requires a completed 03_limit_tcp_steps.py stage")
-        partial_name = "03_partial_episode_stats.jsonl"
+            raise SystemExit("Metadata finalization requires a completed 05_limit_tcp_steps.py stage")
+        partial_name = "05_partial_episode_stats.jsonl"
     elif bool(config.get("smoothing", {}).get("enabled", False)):
         if marker.get("smoothing_status") != "complete":
-            raise SystemExit("Metadata finalization requires a completed 02_smooth_trajectories.py stage")
-        partial_name = "02_partial_episode_stats.jsonl"
+            raise SystemExit("Metadata finalization requires a completed 04_smooth_trajectories.py stage")
+        partial_name = "04_partial_episode_stats.jsonl"
     else:
-        partial_name = "01_partial_episode_stats.jsonl"
+        partial_name = "03_partial_episode_stats.jsonl"
     partial_path = work / partial_name
     if not partial_path.exists():
         raise SystemExit(f"Missing {partial_path}; run the preceding trajectory stages first")
@@ -118,7 +118,7 @@ def main() -> None:
                 output, source_info["video_path"], episode_index, chunks_size, video_key=layout.output_video_key
             )
             if not video_path.exists():
-                raise SystemExit(f"Missing {video_path}; 06_convert_videos.py did not complete successfully")
+                raise SystemExit(f"Missing {video_path}; 08_convert_videos.py did not complete successfully")
             stats[layout.output_video_key] = sample_video_stats(video_path, sample_frames)
         episode_stats.append({"episode_index": episode_index, "stats": stats})
         print(f"[{number}/{len(episodes)}] metadata episode {episode_index:06d}")
