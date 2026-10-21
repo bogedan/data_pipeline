@@ -121,16 +121,27 @@ def resolve_bindings(config: dict[str, Any], info: dict[str, Any]) -> list[ArmBi
     if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
         raise ValueError("observation.state metadata must contain string names")
     result: list[ArmBinding] = []
+    pose_sources: list[str] = []
     for role in ARM_ORDER:
         if role not in arms:
             continue
         arm = arms[role]
-        pose_source = str(arm["pose_source"])
-        gripper_id = str(arm["gripper"])
-        mvs_name = str(arm["mvs"])
+        if not isinstance(arm, dict):
+            raise ValueError(f"robot.arms.{role} must be a mapping")
+        pose_source = arm.get("pose_source")
+        gripper_id = arm.get("gripper")
+        mvs_name = arm.get("mvs")
+        if not isinstance(pose_source, str) or not pose_source:
+            raise ValueError(f"robot.arms.{role}.pose_source must be configured")
+        if not isinstance(gripper_id, str) or not gripper_id:
+            raise ValueError(f"robot.arms.{role}.gripper must be configured")
+        if not isinstance(mvs_name, str) or not mvs_name:
+            raise ValueError(f"robot.arms.{role}.mvs must be configured")
         if mvs_name not in cameras or not isinstance(cameras[mvs_name], dict):
             raise ValueError(f"robot.arms.{role}.mvs does not reference robot.mvs")
-        serial = str(cameras[mvs_name]["serial"])
+        serial = cameras[mvs_name].get("serial")
+        if not isinstance(serial, str) or not serial:
+            raise ValueError(f"robot.mvs.{mvs_name}.serial must be configured")
         indices: list[int] = []
         for component in POSE_COMPONENTS:
             matches = [
@@ -141,6 +152,9 @@ def resolve_bindings(config: dict[str, Any], info: dict[str, Any]) -> list[ArmBi
                 raise ValueError(f"Expected one {pose_source}.{component} state field, found {len(matches)}")
             indices.append(matches[0])
         result.append(ArmBinding(role, tuple(indices), gripper_id, mvs_name, serial, f"observation.images.mvs_{serial}"))
+        pose_sources.append(pose_source)
+    if len(pose_sources) != len(set(pose_sources)):
+        raise ValueError("Multiple arms cannot share one pose_source")
     for attribute in ("gripper_id", "mvs_name"):
         values = [getattr(item, attribute) for item in result]
         if len(values) != len(set(values)):
@@ -231,6 +245,8 @@ def load_detector(root: Path, config: dict[str, Any], info: dict[str, Any], bind
         raise ValueError(f"Camera calibration identity mismatch: {camera_path}")
     if gripper_yaml.get("gripper_id") != binding.gripper_id:
         raise ValueError(f"Gripper calibration identity mismatch: {gripper_path}")
+    if gripper_yaml.get("measurement") != "marker_center_distance" or gripper_yaml.get("units") != "m":
+        raise ValueError(f"Gripper calibration must measure marker_center_distance in meters: {gripper_path}")
     if str(gripper_yaml.get("source", {}).get("camera_serial")) != binding.mvs_serial:
         raise ValueError(f"Gripper and MVS calibration mismatch: {gripper_path}")
     if camera_yaml.get("camera_model", {}).get("type") != "opencv_fisheye":
@@ -400,6 +416,8 @@ def convert(source: Path, output: Path, *, mode: str, overwrite: bool = False) -
             raise ValueError(f"mode=overwrite requires one {binding.gripper_id}.width_m field; found {count}")
         if mode == "add" and count:
             raise ValueError(f"mode=add cannot add existing {binding.gripper_id}.width_m field")
+    if mode == "add" and any(name.endswith(".width_m") for name in names):
+        raise ValueError("mode=add does not support an input that already contains gripper width fields")
     detectors = {binding.gripper_id: load_detector(source, config, info, binding) for binding in bindings}
     episodes = read_jsonl(source / "meta/episodes.jsonl")
     stats = read_jsonl(source / "meta/episodes_stats.jsonl")

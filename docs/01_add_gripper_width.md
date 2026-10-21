@@ -49,3 +49,20 @@ python 01_add_gripper_width.py \
 - `meta/info.json` 中 state 的 shape 和 names。
 - episode 和全局 state 统计。
 - `meta/gripper_width_report.json`，记录每个夹爪的检测和插值帧数。
+
+## 数据要求与处理规则
+
+脚本支持右单臂以及 `right + left` 双臂数据。机械臂按 `right`、`left` 排列，每个宽度紧跟对应的七维 TCP：
+
+```text
+右单臂：right TCP(7) + right width
+双臂：  right TCP(7) + right width + left TCP(7) + left width
+```
+
+未绑定到机械臂的其他 state 字段保留在机械臂字段之后。宽度单位为米，表示两个 marker 中心之间的距离。`gripper_detect_online.<gripper_id>.enabled` 只控制采集期间的在线检测，离线处理仍会使用同一配置中的 `roi_xywh`。
+
+`mode: add` 用于原始 state 中没有 width 字段的数据；只要输入中已有任意 `.width_m` 字段就会拒绝执行。采集时关闭在线检测而留下 `-1.0` 占位值时，应使用 `mode: overwrite`，该模式保持 state 的维度和字段顺序不变。
+
+输入视频帧数必须与对应 Parquet 行数一致。输出会先写入临时目录，全部 episode 成功后再发布；处理中途失败不会留下不完整的目标数据集。原始数据集不会被修改。
+
+由于输入是压缩后的 MP4，离线识别结果可能与采集现场显示的实时宽度略有差异。每个 episode 的成功识别数和插值数可在 `meta/gripper_width_report.json` 中查看。

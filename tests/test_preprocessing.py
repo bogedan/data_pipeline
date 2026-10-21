@@ -19,6 +19,7 @@ width_module = importlib.import_module("01_add_gripper_width")
 ArmBinding = width_module.ArmBinding
 add_or_overwrite = width_module.add_or_overwrite
 output_names = width_module.output_names
+resolve_bindings = width_module.resolve_bindings
 discover_inputs = merge_module.discover_inputs
 merge_datasets = merge_module.merge_datasets
 read_json = merge_module.read_json
@@ -155,6 +156,62 @@ def test_add_and_overwrite_width_modes() -> None:
     overwritten = add_or_overwrite(added, {"gripper_right": np.asarray([0.3, 0.4])}, [binding], output_names(names, [binding]), "overwrite")
     assert overwritten.shape == added.shape
     np.testing.assert_allclose(overwritten[:, -1], [0.3, 0.4])
+
+
+def test_dual_arm_widths_follow_right_then_left_tcp() -> None:
+    components = ("x", "y", "z", "qx", "qy", "qz", "qw")
+    left_names = [f"tcp_left_L.{component}" for component in components]
+    right_names = [f"tcp_right_R.{component}" for component in components]
+    names = left_names + ["object_O.x"] + right_names
+    config = {
+        "robot": {
+            "arms": {
+                "left": {"pose_source": "tcp_left", "gripper": "gripper_left", "mvs": "left_hand"},
+                "right": {"pose_source": "tcp_right", "gripper": "gripper_right", "mvs": "right_hand"},
+            },
+            "mvs": {
+                "left_hand": {"serial": "L"},
+                "right_hand": {"serial": "R"},
+            },
+        }
+    }
+    info = {"features": {"observation.state": {"names": names}}}
+    bindings = resolve_bindings(config, info)
+    state = np.arange(30, dtype=np.float32).reshape(2, 15)
+    widths = {
+        "gripper_right": np.asarray([100.0, 101.0], dtype=np.float32),
+        "gripper_left": np.asarray([200.0, 201.0], dtype=np.float32),
+    }
+
+    result = add_or_overwrite(state, widths, bindings, names, "add")
+
+    assert [binding.role for binding in bindings] == ["right", "left"]
+    np.testing.assert_array_equal(result[:, :7], state[:, 8:15])
+    np.testing.assert_array_equal(result[:, 7], widths["gripper_right"])
+    np.testing.assert_array_equal(result[:, 8:15], state[:, :7])
+    np.testing.assert_array_equal(result[:, 15], widths["gripper_left"])
+    np.testing.assert_array_equal(result[:, 16], state[:, 7])
+
+
+def test_dual_arms_cannot_share_pose_source() -> None:
+    components = ("x", "y", "z", "qx", "qy", "qz", "qw")
+    names = [f"tcp_shared_S.{component}" for component in components]
+    config = {
+        "robot": {
+            "arms": {
+                "right": {"pose_source": "tcp_shared", "gripper": "gripper_right", "mvs": "right_hand"},
+                "left": {"pose_source": "tcp_shared", "gripper": "gripper_left", "mvs": "left_hand"},
+            },
+            "mvs": {
+                "right_hand": {"serial": "R"},
+                "left_hand": {"serial": "L"},
+            },
+        }
+    }
+    info = {"features": {"observation.state": {"names": names}}}
+
+    with pytest.raises(ValueError, match="share one pose_source"):
+        resolve_bindings(config, info)
 
 
 def test_last_preprocessing_output_becomes_pipeline_source(tmp_path: Path) -> None:
