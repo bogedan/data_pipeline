@@ -51,6 +51,10 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 validate_openpi.py               独立验证最终数据集和 OpenPI loader
 ```
 
+完整配置字段见 [docs/CONFIG.md](docs/CONFIG.md)。每个可执行脚本的用法、输入、输出和复跑要求见
+`docs` 中与脚本同名的 Markdown，例如 [00_merge_datasets.md](docs/00_merge_datasets.md) 和
+[run_data_pipeline.md](docs/run_data_pipeline.md)。
+
 ## 使用
 
 先检查并修改 `config.yaml`，尤其是：
