@@ -55,6 +55,8 @@ validate_openpi.py               独立验证最终数据集和 OpenPI loader
 `docs` 中与脚本同名的 Markdown，例如 [00_merge_datasets.md](docs/00_merge_datasets.md) 和
 [run_data_pipeline.md](docs/run_data_pipeline.md)。
 
+独立环境、FFmpeg、Python 依赖和可选测试环境的安装步骤见 [install.md](install.md)。
+
 ## 使用
 
 先检查并修改 `config.yaml`，尤其是：
@@ -92,17 +94,16 @@ validate_openpi.py               独立验证最终数据集和 OpenPI loader
 运行时从源数据集资产中读取对应的 `gripper_*.yaml`，把 `distance.observed_min_m/observed_max_m` 线性映射到
 `width_to_rad.min_rad/max_rad`，并进行裁剪，不在流水线配置中复制标定数值。
 
-安装轻量处理依赖；OpenPI 自己的环境若已包含这些包，可以直接使用它：
+建议按照 [install.md](install.md) 创建独立环境并安装固定依赖，避免改变数据采集环境中的 LeRobot、PyAV 和 Rerun 版本。
 
 ```bash
-conda activate omniumix_lerobot_v21
-python -m pip install -r requirements.txt
+conda activate omniumix_data_pipeline
 ```
 
 一次运行完整预处理和转换流水线：
 
 ```bash
-conda activate omniumix_lerobot_v21
+conda activate omniumix_data_pipeline
 ./run_data_pipeline.sh config.yaml
 ```
 
@@ -139,7 +140,7 @@ episode 之前失败，可在修复后从该编号继续；若 marker 已显示 
 RRD 使用 `rerun-sdk==0.23.1` 生成；该环境已经安装此版本。重建环境时可执行：
 
 ```bash
-conda activate omniumix_lerobot_v21
+conda activate omniumix_data_pipeline
 python -m pip install "rerun-sdk==0.23.1"
 rerun --version
 ```
@@ -147,7 +148,7 @@ rerun --version
 启动 Web Viewer：
 
 ```bash
-conda activate omniumix_lerobot_v21
+conda activate omniumix_data_pipeline
 
 rerun --serve-web \
   --bind=0.0.0.0 \
