@@ -452,7 +452,15 @@ def convert(source: Path, output: Path, *, mode: str, overwrite: bool = False) -
             pq.write_table(replace_state(table, updated_state), parquet, compression="snappy")
             stats_by_episode[index]["stats"][STATE_KEY] = state_stats(updated_state)
             report.append(episode_report)
-            print(f"[{number}/{len(episodes)}] width episode {index:06d}", flush=True)
+            details = []
+            for binding in bindings:
+                values = episode_report["grippers"][binding.gripper_id]
+                rate = 100.0 * values["detected"] / values["frames"] if values["frames"] else 0.0
+                details.append(
+                    f"{binding.role}: detected={values['detected']}/{values['frames']} "
+                    f"({rate:.1f}%), interpolated={values['interpolated']}"
+                )
+            print(f"[{number}/{len(episodes)}] width episode {index:06d}({' | '.join(details)})", flush=True)
 
         final_names = names if mode == "overwrite" else output_names(names, bindings)
         new_info = copy.deepcopy(info)
@@ -470,6 +478,17 @@ def convert(source: Path, output: Path, *, mode: str, overwrite: bool = False) -
             "episodes": report,
         })
         publish_directory(stage, output, overwrite)
+        for binding in bindings:
+            values = [episode["grippers"][binding.gripper_id] for episode in report]
+            detected = sum(item["detected"] for item in values)
+            interpolated = sum(item["interpolated"] for item in values)
+            frames = sum(item["frames"] for item in values)
+            rate = 100.0 * detected / frames if frames else 0.0
+            print(
+                f"[WIDTH SUMMARY] {binding.gripper_id}: detected={detected}/{frames} "
+                f"({rate:.1f}%), interpolated={interpolated}",
+                flush=True,
+            )
         print(f"Added gripper widths to {output}: mode={mode}, episodes={len(episodes)}")
         return output
     finally:
