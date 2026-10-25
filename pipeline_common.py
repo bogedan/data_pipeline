@@ -176,8 +176,7 @@ def output_root(config: dict[str, Any]) -> Path:
 
 
 def work_root(config: dict[str, Any]) -> Path:
-    output = output_root(config)
-    return output.with_name(f"{output.name}_work")
+    return output_root(config) / "work"
 
 
 def read_json(path: Path) -> Any:

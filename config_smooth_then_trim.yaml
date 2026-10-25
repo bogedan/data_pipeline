@@ -78,6 +78,7 @@ video:
 metadata:
   video_stats_frames_per_episode: 100
 visualization:
+  with_paths: true
   point_radius_m: 0.0012
   path_radius_m: 0.00035
 validation:

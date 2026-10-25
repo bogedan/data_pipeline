@@ -24,7 +24,7 @@ python 02_inspect_source.py --config config.yaml
 检查报告写入：
 
 ```text
-<output.root>_work/02_inspection.json
+<output.root>/work/02_inspection.json
 ```
 
 warning 会显示但不阻止运行；存在 error 时脚本以非零状态退出。

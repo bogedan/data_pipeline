@@ -125,6 +125,7 @@ metadata:
 
 visualization:
   # Rerun uses metric radii. Keep points smaller than the 1 mm sampling spacing.
+  with_paths: true
   point_radius_m: 0.0012
   path_radius_m: 0.00035
 

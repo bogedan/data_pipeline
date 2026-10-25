@@ -34,21 +34,45 @@ def fixed_float_list(values: np.ndarray) -> pa.FixedSizeListArray:
     return pa.FixedSizeListArray.from_arrays(pa.array(values.reshape(-1), type=pa.float32()), values.shape[1])
 
 
-def prepare_output(config: dict) -> Path:
+def inspection_only_output(output: Path) -> bool:
+    report = output / "work" / "02_inspection.json"
+    if not report.is_file():
+        return False
+    return {path.relative_to(output) for path in output.rglob("*")} == {
+        Path("work"),
+        Path("work/02_inspection.json"),
+    }
+
+
+def prepare_output(config: dict, source: Path) -> Path:
+    source_assets = source / "assets"
+    if not source_assets.is_dir():
+        raise FileNotFoundError(f"Source dataset assets directory does not exist: {source_assets}")
     assert_safe_output(config)
     output = output_root(config)
+    inspection = output / "work" / "02_inspection.json"
+    inspection_report = read_json(inspection) if inspection.is_file() else None
     if output.exists():
         marker = output / PIPELINE_MARKER
-        if not bool(config["output"].get("overwrite", False)):
-            raise FileExistsError(f"Output exists; set output.overwrite=true to rebuild it: {output}")
-        if not marker.exists():
-            raise RuntimeError(f"Refusing to remove unmarked directory: {output}")
-        shutil.rmtree(output)
-    output.mkdir(parents=True)
+        if not inspection_only_output(output):
+            if not bool(config["output"].get("overwrite", False)):
+                raise FileExistsError(f"Output exists; set output.overwrite=true to rebuild it: {output}")
+            if not marker.exists():
+                raise RuntimeError(f"Refusing to remove unmarked directory: {output}")
+            shutil.rmtree(output)
+    output.mkdir(parents=True, exist_ok=True)
     write_json(
         output / PIPELINE_MARKER,
         {"pipeline": "openpi_umi_v21", "config": config["_config_path"], "complete": False},
     )
+    shutil.copytree(
+        source_assets,
+        output / "assets",
+        copy_function=shutil.copy2,
+        ignore=shutil.ignore_patterns("*.rrd"),
+    )
+    if inspection_report is not None:
+        write_json(output / "work" / "02_inspection.json", inspection_report)
     return output
 
 
@@ -58,7 +82,7 @@ def main() -> None:
     args = parser.parse_args()
     config = load_config(args.config)
     source = source_root(config)
-    output = prepare_output(config)
+    output = prepare_output(config, source)
     work = work_root(config)
     info = read_json(source / "meta/info.json")
     episodes = read_jsonl(source / "meta/episodes.jsonl")

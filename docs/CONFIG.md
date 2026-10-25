@@ -111,7 +111,7 @@ output:
 | `chunks_size` | 每个 data/video chunk 最多包含的 episode 数。 |
 | `overwrite` | `03` 是否允许重建已有输出。只有包含 `.openpi_data_pipeline.json` 的目录才会被删除。 |
 
-工作报告写入与输出同级的 `<output.root>_work` 目录。
+工作报告写入最终数据集内的 `<output.root>/work` 目录。
 
 ## task
 
@@ -313,11 +313,12 @@ metadata:
 
 ```yaml
 visualization:
+  with_paths: true
   point_radius_m: 0.0012
   path_radius_m: 0.00035
 ```
 
-这两个值分别控制 `10` 中 TCP 点和可选轨迹线的 Rerun 显示半径，单位为米。命令行参数可以覆盖它们。
+`with_paths` 控制 `10` 是否绘制每个 episode 的轨迹连线。其余两个值分别控制 TCP 点和轨迹线的 Rerun 显示半径，单位为米。命令行参数可以覆盖这些设置。
 
 ## validation
 

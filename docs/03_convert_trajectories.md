@@ -24,7 +24,11 @@ x, y, z, rot6d_0..5, gripper_angle_rad
 
 ## 输出与安全
 
-脚本创建 `output.root`，写入 parquet、任务 metadata 和 `.openpi_data_pipeline.json` marker。视频由 `08` 生成。
+脚本创建 `output.root`，写入 parquet、任务 metadata 和 `.openpi_data_pipeline.json` marker，并将当前有效源数据集的 `assets/` 目录复制到输出数据集。视频由 `08` 生成。
+
+如果启用了 merge 或夹爪宽度预处理，“当前有效源数据集”分别是对应阶段的输出，因此最终保存的是实际参与轨迹转换的任务配置、Rerun blueprint、标定文件及其他归档 assets。源数据集缺少 `assets/` 时，脚本会在修改已有输出前停止。
+
+`*.rrd` 不会复制，因为其中的轨迹点云对应处理前数据；可在最终数据生成后重新创建，避免把旧轨迹误认为处理结果。
 
 如果输出已存在：
 

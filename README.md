@@ -71,7 +71,7 @@ validate_openpi.py               独立验证最终数据集和 OpenPI loader
   夹爪 ROI，后续转换阶段按 `robot.arms` 解析 pose source、夹爪和 MVS；
 - 预处理会校验各输入的任务 metadata、特征 schema、设备绑定和全部归档 assets；
 - 转换阶段找到多个任务 YAML 候选时可设置 `source.task_config`；
-- `output.root`：最终数据集目录；中间报告和统计自动写入同级的 `<output.root>_work`；
+- `output.root`：最终数据集目录；中间报告和统计自动写入 `<output.root>/work`；
 - `trajectory.action_offset_frames`：state 与 action 的时间关系；
 - `trajectory.pose_transform.enabled`：是否额外应用一次固定的 tracker→TCP 变换，必须明确填 true/false；
 - `smoothing.enabled`：是否在硬步长限制前执行局部轨迹平滑；
@@ -82,7 +82,8 @@ validate_openpi.py               独立验证最终数据集和 OpenPI loader
 - `task.prompt`：训练指令；
 - `output.root`：输出目录。
 - `visualization.point_radius_m`：TCP 点云中每个点的显示半径；
-- `visualization.path_radius_m`：使用 `--with-paths` 时轨迹线的显示半径。
+- `visualization.with_paths`：是否绘制每个 episode 的轨迹连线；
+- `visualization.path_radius_m`：轨迹线的显示半径。
 
 最终数据集的 `robot_type` 直接继承源数据 `meta/info.json`，不在流水线配置中重复填写。
 
@@ -132,9 +133,13 @@ python 01_add_gripper_width.py --input /path/to/merged --output /path/to/merged_
 `set -e` 会让任一步骤失败时立即停止，避免在缺少上一步产物时继续运行后续脚本。若某阶段在开始改写
 episode 之前失败，可在修复后从该编号继续；若 marker 已显示 `running`，则应从 `03` 重建输出。
 
-`10` 只读取最终数据集，不修改 parquet 或视频。默认每个 episode 使用不同颜色绘制 TCP 点云，
-白点表示起点、黑点表示终点；添加 `--with-paths` 可以同时绘制轨迹连线。输出位置为
-`<output.root>_work/10_all_episode_tcp_pointcloud.rrd`。
+`10` 只读取源数据集和最终数据集，不修改 parquet 或视频。默认每个 episode 使用不同颜色绘制 TCP 点云，
+白点表示起点、黑点表示终点；`visualization.with_paths` 控制是否同时绘制轨迹连线。处理前和处理后结果分别写入
+`<output.root>/assets/<任务配置名>_origin.rrd` 和 `<output.root>/assets/<任务配置名>.rrd`。
+
+`03` 创建最终输出数据集时会把当前有效源数据集的 `assets/` 复制到 `output.root/assets/`，
+保留实际处理时使用的任务配置、Rerun blueprint、标定文件和其他归档文件。处理前生成的 `*.rrd`
+轨迹点云不会复制，以免与最终轨迹不一致。
 
 远程服务器没有 X server 时，可以直接使用 `data_pipeline` 环境中的 Rerun Web Viewer。当前
 RRD 使用 `rerun-sdk==0.23.1` 生成；该环境已经安装此版本。重建环境时可执行：
@@ -154,7 +159,7 @@ rerun --serve-web \
   --bind=0.0.0.0 \
   --web-viewer-port=9090 \
   --port=9876 \
-  /share/project/lxy/data_pipeline/work/test_20261003_155718_openpi_smooth_2/10_all_episode_tcp_pointcloud.rrd
+  /path/to/output_dataset/assets/task_name.rrd
 ```
 
 如果服务器端口没有直接开放，在本地执行 SSH 转发：
@@ -174,9 +179,9 @@ ssh -L 9090:localhost:9090 -L 9876:localhost:9876 用户名@服务器地址
 
 平滑后会从新的 `observation.state` 重新构造 shifted action，并写出：
 
-- `<output.root>_work/04_smoothing_manifest.jsonl`：每个 episode 的位置/旋转改变量和 jerk；
-- `<output.root>_work/04_smoothing_report.json`：全数据集汇总；
-- `<output.root>_work/04_smoothing_comparison.rrd`：灰色原始轨迹、蓝色平滑轨迹和两者姿态坐标轴。
+- `<output.root>/work/04_smoothing_manifest.jsonl`：每个 episode 的位置/旋转改变量和 jerk；
+- `<output.root>/work/04_smoothing_report.json`：全数据集汇总；
+- `<output.root>/work/04_smoothing_comparison.rrd`：灰色原始轨迹、蓝色平滑轨迹和两者姿态坐标轴。
 
 该阶段不改变帧数，因此视频无需选帧。确认 RRD 和报告可接受后，再单独决定是否增加内部静止
 平台压缩，避免把“去抖”和“删除重复时间点”混在一次数据变换中。
@@ -191,10 +196,10 @@ ssh -L 9090:localhost:9090 -L 9876:localhost:9876 用户名@服务器地址
 
 该阶段保持帧数、夹爪和端点不变，并基于处理后的 `observation.state` 重建 action。输出包括：
 
-- `<output.root>_work/03_step_limit_reference.json`：未平滑原始分布的固定阈值；
-- `<output.root>_work/05_step_limit_manifest.jsonl`：每个 episode 的处理前后步长与迭代次数；
-- `<output.root>_work/05_step_limit_report.json`：全数据集汇总；
-- `<output.root>_work/05_step_limit_comparison.rrd`：阶段输入与限制后轨迹对比。
+- `<output.root>/work/03_step_limit_reference.json`：未平滑原始分布的固定阈值；
+- `<output.root>/work/05_step_limit_manifest.jsonl`：每个 episode 的处理前后步长与迭代次数；
+- `<output.root>/work/05_step_limit_report.json`：全数据集汇总；
+- `<output.root>/work/05_step_limit_comparison.rrd`：阶段输入与限制后轨迹对比。
 
 ### 首尾静止段裁剪
 
@@ -206,7 +211,7 @@ plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值
 - 重置 episode 内 `timestamp` 和 `frame_index`，重建全局 `index`；
 - 从裁剪后的 `observation.state` 重新生成 shifted action，保证新尾帧不会指向已删除的状态；
 - 更新 episode 长度和统计；
-- 写入 `<output.root>_work/06_trim_manifest.jsonl`，供 08 对视频应用完全相同的帧切片。
+- 写入 `<output.root>/work/06_trim_manifest.jsonl`，供 08 对视频应用完全相同的帧切片。
 
 如果裁剪阶段中断，重新运行 03（需要 `output.overwrite: true`）后依次执行 04、05、06，避免在已部分
 处理的数据上重复裁剪。首次使用建议将 `validation.episode_limit` 设为 `1` 检查报告和视频同步。
@@ -227,9 +232,9 @@ plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值
 
 阶段会生成：
 
-- `<output.root>_work/07_turn_sparsification_manifest.jsonl`：保留/删除索引和每个 episode 的约束结果；
-- `<output.root>_work/07_turn_sparsification_report.json`：全数据集删点比例；
-- `<output.root>_work/07_turn_sparsification_comparison.rrd`：蓝色平滑输入、绿色保留点、黄色删除点。
+- `<output.root>/work/07_turn_sparsification_manifest.jsonl`：保留/删除索引和每个 episode 的约束结果；
+- `<output.root>/work/07_turn_sparsification_report.json`：全数据集删点比例；
+- `<output.root>/work/07_turn_sparsification_comparison.rrd`：蓝色平滑输入、绿色保留点、黄色删除点。
 
 07 若发现删帧后的相邻位姿超过已启用的百分位限制，会恢复该区间必要的帧。08 再根据 manifest 从源视频选择
 完全相同的帧并重新编码，把输出重新设为固定 30 Hz；parquet 的 timestamp、

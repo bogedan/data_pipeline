@@ -14,11 +14,18 @@ from pipeline_common import sparsify_dense_turns
 from pipeline_common import ArmLayout
 from pipeline_common import find_trajectory_trim_bounds
 from pipeline_common import output_state_names
+from pipeline_common import work_root
 from pipeline_common import resolve_arm_layouts
 from pipeline_common import sample_trajectory_prefix
 from pipeline_common import source_state_to_trajectory
 from pipeline_common import sparsify_trajectory_turns
 from pipeline_common import step_limit_tolerances
+
+
+def test_work_root_is_inside_output_dataset(tmp_path) -> None:
+    output = tmp_path / "output_dataset"
+
+    assert work_root({"output": {"root": str(output)}}) == output.resolve() / "work"
 
 
 def test_identity_quaternion_uses_matrix_columns() -> None:
