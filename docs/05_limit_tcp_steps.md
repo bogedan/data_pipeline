@@ -23,7 +23,7 @@ python 05_limit_tcp_steps.py --config config.yaml
 
 ## 输出
 
-- 原地更新 `output.root/data` 中的 state 和 action。
+- 原地更新 `<最终输出目录>/data` 中的 state 和 action。
 - `05_step_limit_manifest.jsonl`
 - `05_partial_episode_stats.jsonl`
 - `05_step_limit_report.json`

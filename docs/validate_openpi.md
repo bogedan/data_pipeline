@@ -38,7 +38,7 @@ validation:
 ## 输出
 
 ```text
-<output.root>/work/validation_report.json
+<最终输出目录>/work/validation_report.json
 ```
 
 报告包含数据规模、最大误差、loader 状态和错误列表。任何检查失败时脚本以非零状态退出。

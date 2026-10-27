@@ -66,12 +66,13 @@ validate_openpi.py               独立验证最终数据集和 OpenPI loader
 - `preprocessing.add_gripper_width`：`mode` 只支持 `add` 和 `overwrite`，采集 YAML 与标定自动从
   上一步数据集的 `assets` 读取；
 - 两个预处理阶段的 `overwrite: false` 会在目标目录已存在时停止，`true` 会原子替换目标；
-- `source.root`：未启用 merge 时填写 LeRobot v2.1 源数据集目录；启用 merge 时可以为 `null`；
+- `source.root`：未启用 merge 时填写 LeRobot v2.1 源数据集目录；夹爪宽度和最终输出自动命名为
+  同级的 `<source.root>_width` 与 `<source.root>_openpi`；启用 merge 时以 merge 输出作为命名基准；
   预处理从 `assets` 中唯一包含 `robot`、`dataset` 和 `gripper_detect_online` 的任务 YAML 读取
   夹爪 ROI，后续转换阶段按 `robot.arms` 解析 pose source、夹爪和 MVS；
 - 预处理会校验各输入的任务 metadata、特征 schema、设备绑定和全部归档 assets；
 - 转换阶段找到多个任务 YAML 候选时可设置 `source.task_config`；
-- `output.root`：最终数据集目录；中间报告和统计自动写入 `<output.root>/work`；
+- 中间报告和统计自动写入最终数据集的 `work` 目录；
 - `trajectory.action_offset_frames`：state 与 action 的时间关系；
 - `trajectory.pose_transform.enabled`：是否额外应用一次固定的 tracker→TCP 变换，必须明确填 true/false；
 - `smoothing.enabled`：是否在硬步长限制前执行局部轨迹平滑；
@@ -80,7 +81,6 @@ validate_openpi.py               独立验证最终数据集和 OpenPI loader
 - `step_limit.position_tolerance_mm`：位置步长限制允许的数值余量，单位为毫米；
 - `step_limit.rotation_tolerance_deg`：旋转步长限制允许的数值余量，单位为度；
 - `task.prompt`：训练指令；
-- `output.root`：输出目录。
 - `visualization.point_radius_m`：TCP 点云中每个点的显示半径；
 - `visualization.with_paths`：是否绘制每个 episode 的轨迹连线；
 - `visualization.path_radius_m`：轨迹线的显示半径。
@@ -135,9 +135,9 @@ episode 之前失败，可在修复后从该编号继续；若 marker 已显示 
 
 `10` 只读取源数据集和最终数据集，不修改 parquet 或视频。默认每个 episode 使用不同颜色绘制 TCP 点云，
 白点表示起点、黑点表示终点；`visualization.with_paths` 控制是否同时绘制轨迹连线。处理前和处理后结果分别写入
-`<output.root>/assets/<任务配置名>_origin.rrd` 和 `<output.root>/assets/<任务配置名>.rrd`。
+`<最终输出目录>/assets/<任务配置名>_origin.rrd` 和 `<最终输出目录>/assets/<任务配置名>.rrd`。
 
-`03` 创建最终输出数据集时会把当前有效源数据集的 `assets/` 复制到 `output.root/assets/`，
+`03` 创建最终输出数据集时会把当前有效源数据集的 `assets/` 复制到 `<最终输出目录>/assets/`，
 保留实际处理时使用的任务配置、Rerun blueprint、标定文件和其他归档文件。处理前生成的 `*.rrd`
 轨迹点云不会复制，以免与最终轨迹不一致。
 
@@ -179,9 +179,9 @@ ssh -L 9090:localhost:9090 -L 9876:localhost:9876 用户名@服务器地址
 
 平滑后会从新的 `observation.state` 重新构造 shifted action，并写出：
 
-- `<output.root>/work/04_smoothing_manifest.jsonl`：每个 episode 的位置/旋转改变量和 jerk；
-- `<output.root>/work/04_smoothing_report.json`：全数据集汇总；
-- `<output.root>/work/04_smoothing_comparison.rrd`：灰色原始轨迹、蓝色平滑轨迹和两者姿态坐标轴。
+- `<最终输出目录>/work/04_smoothing_manifest.jsonl`：每个 episode 的位置/旋转改变量和 jerk；
+- `<最终输出目录>/work/04_smoothing_report.json`：全数据集汇总；
+- `<最终输出目录>/work/04_smoothing_comparison.rrd`：灰色原始轨迹、蓝色平滑轨迹和两者姿态坐标轴。
 
 该阶段不改变帧数，因此视频无需选帧。确认 RRD 和报告可接受后，再单独决定是否增加内部静止
 平台压缩，避免把“去抖”和“删除重复时间点”混在一次数据变换中。
@@ -196,10 +196,10 @@ ssh -L 9090:localhost:9090 -L 9876:localhost:9876 用户名@服务器地址
 
 该阶段保持帧数、夹爪和端点不变，并基于处理后的 `observation.state` 重建 action。输出包括：
 
-- `<output.root>/work/03_step_limit_reference.json`：未平滑原始分布的固定阈值；
-- `<output.root>/work/05_step_limit_manifest.jsonl`：每个 episode 的处理前后步长与迭代次数；
-- `<output.root>/work/05_step_limit_report.json`：全数据集汇总；
-- `<output.root>/work/05_step_limit_comparison.rrd`：阶段输入与限制后轨迹对比。
+- `<最终输出目录>/work/03_step_limit_reference.json`：未平滑原始分布的固定阈值；
+- `<最终输出目录>/work/05_step_limit_manifest.jsonl`：每个 episode 的处理前后步长与迭代次数；
+- `<最终输出目录>/work/05_step_limit_report.json`：全数据集汇总；
+- `<最终输出目录>/work/05_step_limit_comparison.rrd`：阶段输入与限制后轨迹对比。
 
 ### 首尾静止段裁剪
 
@@ -211,7 +211,7 @@ plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值
 - 重置 episode 内 `timestamp` 和 `frame_index`，重建全局 `index`；
 - 从裁剪后的 `observation.state` 重新生成 shifted action，保证新尾帧不会指向已删除的状态；
 - 更新 episode 长度和统计；
-- 写入 `<output.root>/work/06_trim_manifest.jsonl`，供 08 对视频应用完全相同的帧切片。
+- 写入 `<最终输出目录>/work/06_trim_manifest.jsonl`，供 08 对视频应用完全相同的帧切片。
 
 如果裁剪阶段中断，重新运行 03（需要 `output.overwrite: true`）后依次执行 04、05、06，避免在已部分
 处理的数据上重复裁剪。首次使用建议将 `validation.episode_limit` 设为 `1` 检查报告和视频同步。
@@ -232,9 +232,9 @@ plateau 的时刻。位置、旋转或夹爪至少一项连续 5 帧超过阈值
 
 阶段会生成：
 
-- `<output.root>/work/07_turn_sparsification_manifest.jsonl`：保留/删除索引和每个 episode 的约束结果；
-- `<output.root>/work/07_turn_sparsification_report.json`：全数据集删点比例；
-- `<output.root>/work/07_turn_sparsification_comparison.rrd`：蓝色平滑输入、绿色保留点、黄色删除点。
+- `<最终输出目录>/work/07_turn_sparsification_manifest.jsonl`：保留/删除索引和每个 episode 的约束结果；
+- `<最终输出目录>/work/07_turn_sparsification_report.json`：全数据集删点比例；
+- `<最终输出目录>/work/07_turn_sparsification_comparison.rrd`：蓝色平滑输入、绿色保留点、黄色删除点。
 
 07 若发现删帧后的相邻位姿超过已启用的百分位限制，会恢复该区间必要的帧。08 再根据 manifest 从源视频选择
 完全相同的帧并重新编码，把输出重新设为固定 30 Hz；parquet 的 timestamp、
@@ -245,7 +245,7 @@ frame_index、全局 index 和 shifted action 同步重建。
 `requirements.txt` 锁定了与 OpenPI 相同 commit 的 LeRobot。手动运行 `validate_openpi.py` 时，除了检查 parquet、动作时序、最终步长、rot6d、视频
 帧数和尺寸，还会实际通过 LeRobot loader 读取当前帧、图像和 32 步 action chunk。
 
-建议第一次把 `validation.episode_limit` 设为 `1`，并把 `output.root` 指向单独的 smoke 目录。全部通过后再改回 `null` 处理完整数据。
+建议第一次在一个小型输入数据集副本上运行，并把 `validation.episode_limit` 设为 `1`。全部通过后再对完整输入运行，并改回 `null`。
 
 ## 安全与复跑
 

@@ -79,7 +79,7 @@ def main() -> None:
         ),
         epilog=(
             "Run 09_finalize_metadata.py before this command. The validation report is written to "
-            "<output.root>/work/validation_report.json."
+            "<derived-output>/work/validation_report.json."
         ),
     )
     parser.add_argument(

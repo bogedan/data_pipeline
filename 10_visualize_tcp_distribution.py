@@ -140,11 +140,11 @@ def main() -> None:
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument(
         "--output", type=Path, default=None,
-        help="Processed .rrd path; defaults to <output.root>/assets/<task_config>.rrd.",
+        help="Processed .rrd path; defaults to <derived-output>/assets/<task_config>.rrd.",
     )
     parser.add_argument(
         "--origin-output", type=Path, default=None,
-        help="Original .rrd path; defaults to <output.root>/assets/<task_config>_origin.rrd.",
+        help="Original .rrd path; defaults to <derived-output>/assets/<task_config>_origin.rrd.",
     )
     parser.add_argument(
         "--point-radius-m",

@@ -19,6 +19,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
 
+from pipeline_common import preprocessing_input_root
+from pipeline_common import width_output_root
+
 STATE_KEY = "observation.state"
 ARM_ORDER = ("right", "left")
 POSE_COMPONENTS = ("x", "y", "z", "qx", "qy", "qz", "qw")
@@ -523,21 +526,19 @@ def main() -> None:
         if not enabled:
             print("Skipping gripper width detection: preprocessing.add_gripper_width.enabled is false")
             return
-        for key in ("mode", "output", "overwrite"):
+        for key in ("mode", "overwrite"):
             if key not in settings:
                 raise ValueError(f"preprocessing.add_gripper_width.{key} is required")
         if settings["mode"] not in {"add", "overwrite"}:
             raise ValueError("preprocessing.add_gripper_width.mode must be add or overwrite")
         if not isinstance(settings["overwrite"], bool):
             raise ValueError("preprocessing.add_gripper_width.overwrite must be true or false")
-        merge = preprocessing.get("merge", {})
-        if isinstance(merge, dict) and merge.get("enabled") is True:
-            source = merge.get("output")
-        else:
-            source = config.get("source", {}).get("root")
-        if not source:
-            raise ValueError("source.root is required when preprocessing.merge is disabled")
-        convert(Path(source), Path(settings["output"]), mode=settings["mode"], overwrite=settings["overwrite"])
+        convert(
+            preprocessing_input_root(config),
+            width_output_root(config),
+            mode=settings["mode"],
+            overwrite=settings["overwrite"],
+        )
     else:
         if args.input is None or args.output is None or args.mode is None:
             parser.error("provide --config, or --input, --output and --mode")

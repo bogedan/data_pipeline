@@ -15,6 +15,9 @@ from pipeline_common import ArmLayout
 from pipeline_common import find_trajectory_trim_bounds
 from pipeline_common import output_state_names
 from pipeline_common import work_root
+from pipeline_common import output_root
+from pipeline_common import source_root
+from pipeline_common import width_output_root
 from pipeline_common import resolve_arm_layouts
 from pipeline_common import sample_trajectory_prefix
 from pipeline_common import source_state_to_trajectory
@@ -23,9 +26,20 @@ from pipeline_common import step_limit_tolerances
 
 
 def test_work_root_is_inside_output_dataset(tmp_path) -> None:
-    output = tmp_path / "output_dataset"
+    source = tmp_path / "source_dataset"
+    config = {"source": {"root": str(source)}, "preprocessing": {"add_gripper_width": {"enabled": False}}}
 
-    assert work_root({"output": {"root": str(output)}}) == output.resolve() / "work"
+    assert output_root(config) == tmp_path / "source_dataset_openpi"
+    assert work_root(config) == tmp_path / "source_dataset_openpi" / "work"
+
+
+def test_width_and_final_outputs_are_derived_from_input(tmp_path) -> None:
+    source = tmp_path / "source_dataset"
+    config = {"source": {"root": str(source)}, "preprocessing": {"add_gripper_width": {"enabled": True}}}
+
+    assert width_output_root(config) == tmp_path / "source_dataset_width"
+    assert source_root(config) == tmp_path / "source_dataset_width"
+    assert output_root(config) == tmp_path / "source_dataset_openpi"
 
 
 def test_identity_quaternion_uses_matrix_columns() -> None:

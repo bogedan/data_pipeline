@@ -11,13 +11,12 @@
 
 ## 数据目录选择
 
-流水线按以下优先级确定转换阶段的源数据集：
+未启用合并时，只需要设置原始数据集的 `source.root`。派生目录与输入目录同级，自动命名：
 
-1. `preprocessing.add_gripper_width.enabled: true` 时使用它的 `output`。
-2. 否则，`preprocessing.merge.enabled: true` 时使用它的 `output`。
-3. 两项都关闭时使用 `source.root`。
+- 夹爪宽度输出：`<输入数据集>_width`。
+- 最终训练数据：`<输入数据集>_openpi`。
 
-因此，启用 merge 和 add_gripper_width 时，`source.root` 可以设为 `null`。
+启用合并时以 `preprocessing.merge.output` 作为派生目录的命名基准。启用夹爪宽度后，转换阶段自动读取 `_width` 数据集；未启用时直接读取输入数据集。
 
 ## preprocessing.merge
 
@@ -65,7 +64,6 @@ preprocessing:
   add_gripper_width:
     enabled: true
     mode: overwrite
-    output: /path/to/merged_width
     overwrite: false
 ```
 
@@ -73,7 +71,6 @@ preprocessing:
 | --- | --- |
 | `enabled` | `false` 时 `01_add_gripper_width.py` 直接跳过。 |
 | `mode` | 只支持 `add` 或 `overwrite`。 |
-| `output` | 写入夹爪宽度后的完整数据集目录。 |
 | `overwrite` | `true` 时原子替换已有输出；`false` 时已有输出会报错。 |
 
 `add` 在 `observation.state` 中新增每个夹爪的 `width_m` 字段；源数据已有该字段时会报错。
@@ -90,7 +87,7 @@ source:
 
 | 字段 | 说明 |
 | --- | --- |
-| `root` | 两个预处理阶段都关闭时使用的 LeRobot v2.1 数据集。 |
+| `root` | 未启用合并时使用的 LeRobot v2.1 输入数据集。 |
 | `task_config` | 可选。`assets` 中存在多个任务 YAML 候选时，用它指定一个文件。 |
 
 任务 YAML 必须包含 `robot` 和 `dataset`。其中 `robot.arms` 定义每条手臂对应的 pose source、
@@ -100,18 +97,16 @@ source:
 
 ```yaml
 output:
-  root: /path/to/output_openpi
   chunks_size: 1000
   overwrite: true
 ```
 
 | 字段 | 说明 |
 | --- | --- |
-| `root` | 最终 OpenPI 格式数据集目录。 |
 | `chunks_size` | 每个 data/video chunk 最多包含的 episode 数。 |
 | `overwrite` | `03` 是否允许重建已有输出。只有包含 `.openpi_data_pipeline.json` 的目录才会被删除。 |
 
-工作报告写入最终数据集内的 `<output.root>/work` 目录。
+最终目录自动使用 `<输入数据集>_openpi`；工作报告写入其中的 `work` 目录。
 
 ## task
 

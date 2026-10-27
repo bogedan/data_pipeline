@@ -8,7 +8,7 @@
 python 01_add_gripper_width.py --config config.yaml
 ```
 
-读取 `preprocessing.add_gripper_width`。如果 merge 已启用，输入自动取 merge 输出；否则使用 `source.root`。
+读取 `preprocessing.add_gripper_width`。如果 merge 已启用，输入自动取 merge 输出；否则使用 `source.root`。输出自动保存到输入数据集同级的 `<输入数据集>_width`。
 
 ## 独立用法
 

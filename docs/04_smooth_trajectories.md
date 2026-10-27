@@ -22,7 +22,7 @@ python 04_smooth_trajectories.py --config config.yaml
 
 ## 输出
 
-- 原地更新 `output.root/data` 中的 state 和 action。
+- 原地更新 `<最终输出目录>/data` 中的 state 和 action。
 - `04_smoothing_manifest.jsonl`
 - `04_partial_episode_stats.jsonl`
 - `04_smoothing_report.json`

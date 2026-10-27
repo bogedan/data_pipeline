@@ -27,7 +27,7 @@ python 09_finalize_metadata.py --config config.yaml
 
 ## 输出
 
-最终 metadata 写入 `output.root/meta`。成功后 `.openpi_data_pipeline.json` 包含：
+最终 metadata 写入 `<最终输出目录>/meta`。成功后 `.openpi_data_pipeline.json` 包含：
 
 - `complete: true`
 - 最终 episode 数

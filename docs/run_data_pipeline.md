@@ -42,6 +42,8 @@ DATA_PIPELINE_PYTHON=/path/to/python ./run_data_pipeline.sh /path/to/config.yaml
 
 脚本使用 `set -Eeuo pipefail`，任一阶段失败会立即停止。具有 `enabled` 字段的阶段关闭时会自行成功跳过。
 
+未启用合并时只需配置 `source.root`。夹爪宽度输出自动使用 `<source.root>_width`，最终输出自动使用 `<source.root>_openpi`。
+
 ## 复跑
 
 - `00` 和 `01` 的目标已存在时，由各自的 `overwrite` 决定报错或原子替换。

@@ -215,11 +215,11 @@ def test_dual_arms_cannot_share_pose_source() -> None:
 
 
 def test_last_preprocessing_output_becomes_pipeline_source(tmp_path: Path) -> None:
-    merged, width = tmp_path / "merged", tmp_path / "width"
+    merged, width = tmp_path / "merged", tmp_path / "merged_width"
     config = {
         "preprocessing": {
             "merge": {"enabled": True, "inputs": ["a", "b"], "output": str(merged), "overwrite": False},
-            "add_gripper_width": {"enabled": True, "mode": "overwrite", "output": str(width), "overwrite": False},
+            "add_gripper_width": {"enabled": True, "mode": "overwrite", "overwrite": False},
         },
         "source": {"root": None},
     }
@@ -253,14 +253,14 @@ def test_disabled_preprocessing_stages_exit_successfully(
 def test_width_config_uses_merge_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    merged, output = tmp_path / "merged", tmp_path / "width"
+    merged, output = tmp_path / "merged", tmp_path / "merged_width"
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         yaml.safe_dump({
             "preprocessing": {
                 "merge": {"enabled": True, "output": str(merged)},
                 "add_gripper_width": {
-                    "enabled": True, "mode": "overwrite", "output": str(output), "overwrite": False,
+                    "enabled": True, "mode": "overwrite", "overwrite": False,
                 },
             },
             "source": {"root": None},

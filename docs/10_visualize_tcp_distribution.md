@@ -33,8 +33,8 @@ python 10_visualize_tcp_distribution.py \
 默认根据源数据集 `assets/` 中的任务配置文件名，写入最终数据集：
 
 ```text
-<output.root>/assets/<任务配置名>_origin.rrd
-<output.root>/assets/<任务配置名>.rrd
+<最终输出目录>/assets/<任务配置名>_origin.rrd
+<最终输出目录>/assets/<任务配置名>.rrd
 ```
 
 `_origin.rrd` 读取管线输入数据中的原始 TCP 位置，另一份读取完成平滑、限步、裁剪和稀疏化后的最终轨迹。不同 episode 使用不同颜色，起点为白色，终点为黑色。脚本还会输出 episode 数、TCP 点数和 XYZ 边界。

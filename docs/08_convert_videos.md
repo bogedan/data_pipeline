@@ -11,7 +11,7 @@ python 08_convert_videos.py --config config.yaml
 ## 输入
 
 - 源数据集中的 MVS 视频。
-- `output.root/meta/episodes.jsonl`。
+- `<最终输出目录>/meta/episodes.jsonl`。
 - 启用 trim 时需要 `06_trim_manifest.jsonl`。
 - 启用 turn_sparsification 时需要 `07_turn_sparsification_manifest.jsonl`。
 
@@ -30,4 +30,4 @@ python 08_convert_videos.py --config config.yaml
 
 ## 输出
 
-视频写入 `output.root` 的 `video_path` 模板位置。该阶段不修改 parquet 和 metadata；最终视频特征由 `09` 写入。
+视频写入 `<最终输出目录>` 的 `video_path` 模板位置。该阶段不修改 parquet 和 metadata；最终视频特征由 `09` 写入。

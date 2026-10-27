@@ -63,19 +63,33 @@ def step_limit_tolerances(config: dict[str, Any]) -> tuple[float, float]:
     return position_tolerance_mm / 1000.0, rotation_tolerance_deg
 
 
-def source_root(config: dict[str, Any]) -> Path:
+def preprocessing_input_root(config: dict[str, Any]) -> Path:
     preprocessing = config.get("preprocessing", {})
-    width = preprocessing.get("add_gripper_width", {}) if isinstance(preprocessing, dict) else {}
     merge = preprocessing.get("merge", {}) if isinstance(preprocessing, dict) else {}
-    if isinstance(width, dict) and width.get("enabled") is True:
-        value = width.get("output")
-    elif isinstance(merge, dict) and merge.get("enabled") is True:
+    if isinstance(merge, dict) and merge.get("enabled") is True:
         value = merge.get("output")
     else:
         value = config.get("source", {}).get("root")
     if not value:
         raise ValueError("source.root is required when dataset preprocessing is disabled")
     return Path(value).expanduser().resolve()
+
+
+def derived_dataset_root(config: dict[str, Any], suffix: str) -> Path:
+    root = preprocessing_input_root(config)
+    return root.with_name(f"{root.name}{suffix}")
+
+
+def width_output_root(config: dict[str, Any]) -> Path:
+    return derived_dataset_root(config, "_width")
+
+
+def source_root(config: dict[str, Any]) -> Path:
+    preprocessing = config.get("preprocessing", {})
+    width = preprocessing.get("add_gripper_width", {}) if isinstance(preprocessing, dict) else {}
+    if isinstance(width, dict) and width.get("enabled") is True:
+        return width_output_root(config)
+    return preprocessing_input_root(config)
 
 
 def source_feature_keys(info: dict[str, Any]) -> tuple[str, list[str]]:
@@ -172,7 +186,7 @@ def gripper_calibration_path(config: dict[str, Any], gripper_id: str) -> Path:
 
 
 def output_root(config: dict[str, Any]) -> Path:
-    return Path(config["output"]["root"]).expanduser().resolve()
+    return derived_dataset_root(config, "_openpi")
 
 
 def work_root(config: dict[str, Any]) -> Path:
@@ -1231,7 +1245,7 @@ def assert_safe_output(config: dict[str, Any]) -> None:
     source = source_root(config)
     output = output_root(config)
     if output == source:
-        raise ValueError("output.root must differ from source.root")
+        raise ValueError("Derived OpenPI output must differ from the effective source dataset")
     if output == Path("/") or len(output.parts) < 4:
         raise ValueError(f"Refusing unsafe output path: {output}")
 
