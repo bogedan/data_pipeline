@@ -24,7 +24,7 @@ python 00_merge_datasets.py \
 ## 输入要求
 
 - 至少两个 LeRobot v2.1 数据集。
-- 任务 metadata、特征 schema、视频键和归档 `assets` 必须一致。
+- 任务 metadata、特征 schema、视频键和归档 `assets` 必须一致；数据衍生的 `*.rrd` 不参与兼容性检查。
 - 每个 episode 的 parquet 行数、`frame_index` 和 metadata 必须匹配。
 - 自动发现模式只接受 `<dataset_name>_<date>_HHMMSS`。
 
@@ -33,5 +33,7 @@ python 00_merge_datasets.py \
 - 重排后的 `data` 和 `videos`。
 - 合并后的 `meta/info.json`、`episodes.jsonl`、`episodes_stats.jsonl` 和 `stats.json`。
 - 连续的 `episode_index` 和全局 `index`。
+
+输入数据集中的旧 `*.rrd` 不会复制到合并结果，因为其中的轨迹只对应各自的输入数据。可在合并或完整处理后重新生成。
 
 输出先写入同级临时目录，全部成功后再原子发布。`overwrite: false` 不会复用已有目录，而是直接报错。

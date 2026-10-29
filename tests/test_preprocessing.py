@@ -122,6 +122,8 @@ def test_merge_reindexes_and_normalizes_state_schema(tmp_path: Path) -> None:
     first, second = tmp_path / "task_20261019_100000", tmp_path / "task_20261019_110000"
     make_dataset(first, [[0, 1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6, 7]], fixed_state=False)
     make_dataset(second, [[2, 3, 4, 5, 6, 7, 8]], fixed_state=True)
+    (first / "assets/trajectory.rrd").write_bytes(b"first dataset trajectory")
+    (second / "assets/trajectory.rrd").write_bytes(b"second dataset trajectory")
     output = tmp_path / "merged"
     merge_datasets([first, second], output)
 
@@ -134,6 +136,7 @@ def test_merge_reindexes_and_normalizes_state_schema(tmp_path: Path) -> None:
     assert second_table["episode_index"].to_pylist() == [1]
     assert second_table["index"].to_pylist() == [2]
     assert (output / "videos/chunk-000/observation.images.mvs_R/episode_000001.mp4").read_bytes() == b"video"
+    assert not (output / "assets/trajectory.rrd").exists()
     assert read_json(output / "meta/stats.json")["index"]["count"] == [3]
 
 

@@ -118,7 +118,7 @@ def asset_manifest(root: Path) -> dict[str, str]:
     return {
         path.relative_to(assets).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(assets.rglob("*"))
-        if path.is_file()
+        if path.is_file() and path.suffix.lower() != ".rrd"
     }
 
 
@@ -287,7 +287,11 @@ def merge_datasets(inputs: list[Path], output: Path, *, overwrite: bool = False)
     global_index = 0
     next_episode = 0
     try:
-        shutil.copytree(inputs[0] / "assets", stage / "assets")
+        shutil.copytree(
+            inputs[0] / "assets",
+            stage / "assets",
+            ignore=shutil.ignore_patterns("*.rrd"),
+        )
         write_jsonl(stage / "meta/tasks.jsonl", base_tasks)
         for source, (info, episodes, stats) in zip(inputs, validated):
             source_chunks = int(info["chunks_size"])
