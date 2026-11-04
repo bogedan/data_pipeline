@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -109,6 +110,39 @@ def make_dataset(root: Path, state_rows: list[list[float]], *, fixed_state: bool
     video.write_bytes(b"video")
 
 
+def add_runtime_set(root: Path, runtime_set_id: str, payload: bytes) -> None:
+    runtime_dir = root / "xense_runtime" / runtime_set_id
+    runtime_dir.mkdir(parents=True)
+    runtime = runtime_dir / "runtime_OG000001"
+    reference = runtime_dir / "reference_OG000001.png"
+    runtime.write_bytes(payload)
+    reference.write_bytes(b"reference")
+    manifest = {
+        "schema_version": 1,
+        "runtime_set_id": runtime_set_id,
+        "capture_session_id": "xcs_test",
+        "generation": 0,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "reason": "recording_start",
+        "sdk_version": "test",
+        "xpack_sha256": None,
+        "sensors": {
+            "finger": {
+                "serial": "OG000001",
+                "runtime": runtime.name,
+                "runtime_sha256": hashlib.sha256(payload).hexdigest(),
+                "reference": reference.name,
+                "reference_sha256": hashlib.sha256(b"reference").hexdigest(),
+                "reference_encoding": "bgr8",
+            }
+        },
+    }
+    write_json(runtime_dir / "manifest.json", manifest)
+    episodes = read_jsonl(root / "meta/episodes.jsonl")
+    episodes[0]["xense_runtime_set_id"] = runtime_set_id
+    write_jsonl(root / "meta/episodes.jsonl", episodes)
+
+
 def test_discovery_only_accepts_exact_raw_collection_names(tmp_path: Path) -> None:
     accepted = ["task_20261019_123819", "task_20261019_130050"]
     rejected = ["task_20261019_merged", "task_20261019_123819_width", "other_20261019_141617"]
@@ -138,6 +172,54 @@ def test_merge_reindexes_and_normalizes_state_schema(tmp_path: Path) -> None:
     assert (output / "videos/chunk-000/observation.images.mvs_R/episode_000001.mp4").read_bytes() == b"video"
     assert not (output / "assets/trajectory.rrd").exists()
     assert read_json(output / "meta/stats.json")["index"]["count"] == [3]
+
+
+def test_merge_preserves_referenced_runtime_sets(tmp_path: Path) -> None:
+    first, second = tmp_path / "task_20261019_100000", tmp_path / "task_20261019_110000"
+    make_dataset(first, [[0, 1, 2, 3, 4, 5, 6]], fixed_state=True)
+    make_dataset(second, [[1, 2, 3, 4, 5, 6, 7]], fixed_state=True)
+    first_id = "xrs_" + "1" * 32
+    second_id = "xrs_" + "2" * 32
+    add_runtime_set(first, first_id, b"first")
+    add_runtime_set(second, second_id, b"second")
+
+    output = tmp_path / "merged"
+    merge_datasets([first, second], output)
+
+    episodes = read_jsonl(output / "meta/episodes.jsonl")
+    assert [row["xense_runtime_set_id"] for row in episodes] == [first_id, second_id]
+    assert (output / "xense_runtime" / first_id / "runtime_OG000001").read_bytes() == b"first"
+    assert (output / "xense_runtime" / second_id / "runtime_OG000001").read_bytes() == b"second"
+
+
+def test_merge_rejects_runtime_set_id_collision(tmp_path: Path) -> None:
+    first, second = tmp_path / "task_20261019_100000", tmp_path / "task_20261019_110000"
+    make_dataset(first, [[0, 1, 2, 3, 4, 5, 6]], fixed_state=True)
+    make_dataset(second, [[1, 2, 3, 4, 5, 6, 7]], fixed_state=True)
+    runtime_set_id = "xrs_" + "1" * 32
+    add_runtime_set(first, runtime_set_id, b"first")
+    add_runtime_set(second, runtime_set_id, b"different")
+
+    with pytest.raises(ValueError, match="ID collision with different content"):
+        merge_datasets([first, second], tmp_path / "merged")
+
+
+def test_merge_rejects_xense_episode_without_runtime_set_id(tmp_path: Path) -> None:
+    first, second = tmp_path / "task_20261019_100000", tmp_path / "task_20261019_110000"
+    for root in (first, second):
+        make_dataset(root, [[0, 1, 2, 3, 4, 5, 6]], fixed_state=True)
+        info = read_json(root / "meta/info.json")
+        info["features"]["observation.images.xense_OG000001"] = {
+            "dtype": "video", "shape": [700, 400, 3]
+        }
+        info["total_videos"] = 2
+        write_json(root / "meta/info.json", info)
+        video = root / "videos/chunk-000/observation.images.xense_OG000001/episode_000000.mp4"
+        video.parent.mkdir(parents=True)
+        video.write_bytes(b"xense video")
+
+    with pytest.raises(ValueError, match="legacy Xense runtime layouts are not supported"):
+        merge_datasets([first, second], tmp_path / "merged")
 
 
 def test_merge_rejects_existing_output_before_processing(tmp_path: Path) -> None:

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
+import re
 import shutil
 
 import numpy as np
@@ -27,6 +29,28 @@ from pipeline_common import source_state_to_trajectory
 from pipeline_common import work_root
 from pipeline_common import write_json
 from pipeline_common import write_jsonl
+
+RUNTIME_SET_FIELD = "xense_runtime_set_id"
+RUNTIME_SET_PATTERN = re.compile(r"^xrs_[0-9a-f]{32}$")
+
+
+def validate_xense_runtime_references(source: Path, info: dict, episodes: list[dict]) -> None:
+    has_xense = any(
+        key.startswith("observation.images.xense_")
+        for key, feature in info.get("features", {}).items()
+        if isinstance(feature, dict) and feature.get("dtype") == "video"
+    )
+    for episode in episodes:
+        runtime_set_id = episode.get(RUNTIME_SET_FIELD)
+        if has_xense or runtime_set_id is not None:
+            if not isinstance(runtime_set_id, str) or not RUNTIME_SET_PATTERN.fullmatch(runtime_set_id):
+                raise ValueError(
+                    f"Episode {episode.get('episode_index')} has no valid {RUNTIME_SET_FIELD}; "
+                    "legacy Xense runtime layouts are not supported"
+                )
+            manifest = source / "xense_runtime" / runtime_set_id / "manifest.json"
+            if not manifest.is_file():
+                raise FileNotFoundError(f"Missing Xense runtime manifest: {manifest}")
 
 
 def fixed_float_list(values: np.ndarray) -> pa.FixedSizeListArray:
@@ -71,6 +95,22 @@ def prepare_output(config: dict, source: Path) -> Path:
         copy_function=shutil.copy2,
         ignore=shutil.ignore_patterns("*.rrd"),
     )
+    source_runtime = source / "xense_runtime"
+    if source_runtime.is_dir():
+        for path in source_runtime.iterdir():
+            if path.name == ".pending":
+                continue
+            if not path.is_dir() or not RUNTIME_SET_PATTERN.fullmatch(path.name):
+                raise ValueError(
+                    f"Unsupported entry under {source_runtime}: {path.name}; "
+                    "legacy Xense runtime layouts are not supported"
+                )
+        shutil.copytree(
+            source_runtime,
+            output / "xense_runtime",
+            copy_function=shutil.copy2,
+            ignore=shutil.ignore_patterns(".pending"),
+        )
     if inspection_report is not None:
         write_json(output / "work" / "02_inspection.json", inspection_report)
     return output
@@ -82,10 +122,11 @@ def main() -> None:
     args = parser.parse_args()
     config = load_config(args.config)
     source = source_root(config)
-    output = prepare_output(config, source)
-    work = work_root(config)
     info = read_json(source / "meta/info.json")
     episodes = read_jsonl(source / "meta/episodes.jsonl")
+    validate_xense_runtime_references(source, info, episodes)
+    output = prepare_output(config, source)
+    work = work_root(config)
     state_key, _ = source_feature_keys(info)
     layouts = resolve_arm_layouts(config, info)
     source_chunks_size = int(info.get("chunks_size", 1000))
@@ -148,13 +189,11 @@ def main() -> None:
                 stats[scalar] = array_stats(values)
         partial_stats.append({"episode_index": episode_index, "stats": stats})
         prompt = config["task"].get("prompt")
-        converted_episodes.append(
-            {
-                "episode_index": episode_index,
-                "tasks": [prompt] if prompt is not None else episode.get("tasks", []),
-                "length": len(table),
-            }
-        )
+        converted_episode = copy.deepcopy(episode)
+        converted_episode["episode_index"] = episode_index
+        converted_episode["tasks"] = [prompt] if prompt is not None else episode.get("tasks", [])
+        converted_episode["length"] = len(table)
+        converted_episodes.append(converted_episode)
         print(f"[{number}/{len(episodes)}] trajectory episode {episode_index:06d}")
 
     if step_limit_enabled:

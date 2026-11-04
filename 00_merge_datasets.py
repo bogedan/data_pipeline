@@ -20,6 +20,8 @@ import pyarrow.parquet as pq
 import yaml
 
 STATE_KEY = "observation.state"
+RUNTIME_SET_FIELD = "xense_runtime_set_id"
+RUNTIME_SET_PATTERN = re.compile(r"^xrs_[0-9a-f]{32}$")
 
 
 def read_json(path: Path) -> Any:
@@ -120,6 +122,104 @@ def asset_manifest(root: Path) -> dict[str, str]:
         for path in sorted(assets.rglob("*"))
         if path.is_file() and path.suffix.lower() != ".rrd"
     }
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def directory_manifest(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): sha256_file(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def validate_runtime_set(source: Path, runtime_set_id: str, expected_serials: set[str]) -> Path:
+    runtime_dir = source / "xense_runtime" / runtime_set_id
+    manifest_path = runtime_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"Missing Xense runtime manifest: {manifest_path}")
+    manifest = read_json(manifest_path)
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        raise ValueError(f"Unsupported Xense runtime manifest: {manifest_path}")
+    if manifest.get("runtime_set_id") != runtime_set_id:
+        raise ValueError(f"Xense runtime manifest ID does not match directory: {manifest_path}")
+    sensors = manifest.get("sensors")
+    if not isinstance(sensors, dict) or not sensors:
+        raise ValueError(f"Xense runtime manifest has no sensors: {manifest_path}")
+    actual_serials: set[str] = set()
+    for name, item in sensors.items():
+        if not isinstance(item, dict) or not isinstance(item.get("serial"), str):
+            raise ValueError(f"Invalid Xense sensor entry {name!r}: {manifest_path}")
+        actual_serials.add(item["serial"])
+        for field, hash_field in (("runtime", "runtime_sha256"), ("reference", "reference_sha256")):
+            relative = item.get(field)
+            if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+                raise ValueError(f"Invalid {field} path for Xense sensor {name!r}: {manifest_path}")
+            path = (runtime_dir / relative).resolve()
+            if runtime_dir.resolve() not in path.parents or not path.is_file():
+                raise FileNotFoundError(f"Missing Xense {field}: {path}")
+            if sha256_file(path) != item.get(hash_field):
+                raise ValueError(f"Xense {field} hash mismatch: {path}")
+    if expected_serials and actual_serials != expected_serials:
+        raise ValueError(
+            f"Xense runtime set {runtime_set_id} serials {sorted(actual_serials)} "
+            f"do not match dataset videos {sorted(expected_serials)}"
+        )
+    return runtime_dir
+
+
+def referenced_runtime_sets(
+    source: Path, info: dict[str, Any], episodes: list[dict[str, Any]],
+) -> dict[str, Path]:
+    expected_serials = {
+        key.removeprefix("observation.images.xense_")
+        for key, feature in info["features"].items()
+        if key.startswith("observation.images.xense_")
+        and isinstance(feature, dict)
+        and feature.get("dtype") == "video"
+    }
+    ids: set[str] = set()
+    for episode in episodes:
+        runtime_set_id = episode.get(RUNTIME_SET_FIELD)
+        if expected_serials or runtime_set_id is not None:
+            if not isinstance(runtime_set_id, str) or not RUNTIME_SET_PATTERN.fullmatch(runtime_set_id):
+                raise ValueError(
+                    f"Episode {episode['episode_index']} in {source} has no valid {RUNTIME_SET_FIELD}; "
+                    "legacy Xense runtime layouts are not supported"
+                )
+            ids.add(runtime_set_id)
+    runtime_root = source / "xense_runtime"
+    if runtime_root.is_dir():
+        for path in runtime_root.iterdir():
+            if path.name == ".pending":
+                continue
+            if not path.is_dir() or not RUNTIME_SET_PATTERN.fullmatch(path.name):
+                raise ValueError(
+                    f"Unsupported entry under {runtime_root}: {path.name}; "
+                    "legacy Xense runtime layouts are not supported"
+                )
+    return {
+        runtime_set_id: validate_runtime_set(source, runtime_set_id, expected_serials)
+        for runtime_set_id in sorted(ids)
+    }
+
+
+def copy_runtime_set(source: Path, destination: Path) -> None:
+    if destination.exists():
+        if directory_manifest(source) != directory_manifest(destination):
+            raise ValueError(
+                f"Xense runtime set ID collision with different content: {destination.name}"
+            )
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, destination, copy_function=shutil.copy2)
 
 
 def compatible_info(info: dict[str, Any]) -> dict[str, Any]:
@@ -263,6 +363,10 @@ def merge_datasets(inputs: list[Path], output: Path, *, overwrite: bool = False)
     if output.exists() and not overwrite:
         raise FileExistsError(f"Output already exists and overwrite is false: {output}")
     validated = [validate_dataset(path) for path in inputs]
+    runtime_sets = [
+        referenced_runtime_sets(path, info, episodes)
+        for path, (info, episodes, _) in zip(inputs, validated)
+    ]
     base_info, _, _ = validated[0]
     base_tasks = read_jsonl(inputs[0] / "meta/tasks.jsonl")
     base_assets = asset_manifest(inputs[0])
@@ -293,6 +397,10 @@ def merge_datasets(inputs: list[Path], output: Path, *, overwrite: bool = False)
             ignore=shutil.ignore_patterns("*.rrd"),
         )
         write_jsonl(stage / "meta/tasks.jsonl", base_tasks)
+        for source_sets in runtime_sets:
+            for runtime_set_id, runtime_dir in source_sets.items():
+                copy_runtime_set(runtime_dir, stage / "xense_runtime" / runtime_set_id)
+
         for source, (info, episodes, stats) in zip(inputs, validated):
             source_chunks = int(info["chunks_size"])
             for episode, stats_row in zip(episodes, stats):

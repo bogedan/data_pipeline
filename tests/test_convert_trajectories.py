@@ -31,6 +31,12 @@ def test_prepare_output_copies_all_source_assets(tmp_path: Path) -> None:
     (source / "assets" / "layout.rbl").write_text("blueprint", encoding="utf-8")
     (source / "assets" / "stale.rrd").write_bytes(b"old trajectory")
     (calibration / "camera.yaml").write_text("rms: 0.2\n", encoding="utf-8")
+    runtime = source / "xense_runtime" / ("xrs_" + "1" * 32)
+    runtime.mkdir(parents=True)
+    (runtime / "manifest.json").write_text("{}\n", encoding="utf-8")
+    pending = source / "xense_runtime" / ".pending" / ("xrs_" + "2" * 32)
+    pending.mkdir(parents=True)
+    (pending / "manifest.json").write_text("{}\n", encoding="utf-8")
 
     result = MODULE.prepare_output(config(source), source)
 
@@ -39,8 +45,32 @@ def test_prepare_output_copies_all_source_assets(tmp_path: Path) -> None:
     assert (output / "assets" / "layout.rbl").read_text(encoding="utf-8") == "blueprint"
     assert (output / "assets" / "calibration" / "camera.yaml").read_text(encoding="utf-8") == "rms: 0.2\n"
     assert not (output / "assets" / "stale.rrd").exists()
+    assert (output / "xense_runtime" / runtime.name / "manifest.json").is_file()
+    assert not (output / "xense_runtime" / ".pending").exists()
     marker = json.loads((output / MODULE.PIPELINE_MARKER).read_text(encoding="utf-8"))
     assert marker["complete"] is False
+
+
+def test_prepare_output_rejects_legacy_root_runtime(tmp_path: Path) -> None:
+    source = tmp_path / "source_dataset"
+    (source / "assets").mkdir(parents=True)
+    runtime_root = source / "xense_runtime"
+    runtime_root.mkdir()
+    (runtime_root / "runtime_OG000001").write_bytes(b"legacy")
+
+    with pytest.raises(ValueError, match="legacy Xense runtime layouts are not supported"):
+        MODULE.prepare_output(config(source), source)
+
+
+def test_xense_episode_requires_runtime_set_reference(tmp_path: Path) -> None:
+    info = {
+        "features": {"observation.images.xense_OG000001": {"dtype": "video"}}
+    }
+
+    with pytest.raises(ValueError, match="legacy Xense runtime layouts are not supported"):
+        MODULE.validate_xense_runtime_references(
+            tmp_path, info, [{"episode_index": 0, "length": 1}]
+        )
 
 
 def test_missing_source_assets_does_not_remove_existing_output(tmp_path: Path) -> None:
