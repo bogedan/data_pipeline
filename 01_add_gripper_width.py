@@ -231,7 +231,13 @@ def validate_roi(value: Any, frame_size: tuple[int, int]) -> tuple[int, int, int
     return x, y, width, height
 
 
-def load_detector(root: Path, config: dict[str, Any], info: dict[str, Any], binding: ArmBinding) -> tuple[tuple[int, int, int, int], WidthDetector]:
+def load_detector(
+    root: Path,
+    config: dict[str, Any],
+    info: dict[str, Any],
+    binding: ArmBinding,
+    roi_xywh: list[int] | tuple[int, int, int, int] | None = None,
+) -> tuple[tuple[int, int, int, int], WidthDetector]:
     online = config.get("gripper_detect_online")
     if not isinstance(online, dict) or not isinstance(online.get(binding.gripper_id), dict):
         raise ValueError(f"Missing gripper_detect_online.{binding.gripper_id}")
@@ -239,7 +245,8 @@ def load_detector(root: Path, config: dict[str, Any], info: dict[str, Any], bind
     if not isinstance(feature, dict) or feature.get("dtype") != "video":
         raise ValueError(f"Missing video feature {binding.video_key}")
     frame_height, frame_width = map(int, feature["shape"][:2])
-    roi = validate_roi(online[binding.gripper_id].get("roi_xywh"), (frame_width, frame_height))
+    configured_roi = online[binding.gripper_id].get("roi_xywh") if roi_xywh is None else roi_xywh
+    roi = validate_roi(configured_roi, (frame_width, frame_height))
 
     camera_path = root / "assets/calibration" / f"mvs_{binding.mvs_serial}.yaml"
     gripper_path = root / "assets/calibration" / f"{binding.gripper_id}.yaml"
@@ -393,7 +400,14 @@ def merge_stats(items: list[dict[str, list[Any]]]) -> dict[str, list[Any]]:
     }
 
 
-def convert(source: Path, output: Path, *, mode: str, overwrite: bool = False) -> Path:
+def convert(
+    source: Path,
+    output: Path,
+    *,
+    mode: str,
+    overwrite: bool = False,
+    roi_xywh: list[int] | tuple[int, int, int, int] | None = None,
+) -> Path:
     source, output = source.expanduser().resolve(), output.expanduser().resolve()
     if not source.is_dir():
         raise FileNotFoundError(f"Input dataset does not exist: {source}")
@@ -407,6 +421,8 @@ def convert(source: Path, output: Path, *, mode: str, overwrite: bool = False) -
     config_path = find_acquisition_config(source)
     config = load_yaml(config_path)
     bindings = resolve_bindings(config, info)
+    if roi_xywh is not None and len(bindings) != 1:
+        raise ValueError("A pipeline roi_xywh override requires a single-arm dataset")
     names = info["features"][STATE_KEY]["names"]
     width = int(info["features"][STATE_KEY]["shape"][0])
     if not isinstance(names, list) or len(names) != width:
@@ -421,7 +437,10 @@ def convert(source: Path, output: Path, *, mode: str, overwrite: bool = False) -
             raise ValueError(f"mode=add cannot add existing {binding.gripper_id}.width_m field")
     if mode == "add" and any(name.endswith(".width_m") for name in names):
         raise ValueError("mode=add does not support an input that already contains gripper width fields")
-    detectors = {binding.gripper_id: load_detector(source, config, info, binding) for binding in bindings}
+    detectors = {
+        binding.gripper_id: load_detector(source, config, info, binding, roi_xywh)
+        for binding in bindings
+    }
     episodes = read_jsonl(source / "meta/episodes.jsonl")
     stats = read_jsonl(source / "meta/episodes_stats.jsonl")
     stats_by_episode = {int(row["episode_index"]): row for row in stats}
@@ -538,6 +557,7 @@ def main() -> None:
             width_output_root(config),
             mode=settings["mode"],
             overwrite=settings["overwrite"],
+            roi_xywh=settings.get("roi_xywh"),
         )
     else:
         if args.input is None or args.output is None or args.mode is None:

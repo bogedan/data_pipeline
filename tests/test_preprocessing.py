@@ -264,6 +264,7 @@ def test_width_config_uses_merge_output(
                 "merge": {"enabled": True, "output": str(merged)},
                 "add_gripper_width": {
                     "enabled": True, "mode": "overwrite", "overwrite": False,
+                    "roi_xywh": [10, 20, 300, 120],
                 },
             },
             "source": {"root": None},
@@ -278,4 +279,10 @@ def test_width_config_uses_merge_output(
     monkeypatch.setattr(width_module, "convert", fake_convert)
     monkeypatch.setattr(sys, "argv", ["01_add_gripper_width.py", "--config", str(config_path)])
     width_module.main()
-    assert received == {"source": merged, "target": output, "mode": "overwrite", "overwrite": False}
+    assert received == {
+        "source": merged,
+        "target": output,
+        "mode": "overwrite",
+        "overwrite": False,
+        "roi_xywh": [10, 20, 300, 120],
+    }
