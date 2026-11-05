@@ -114,11 +114,9 @@ def add_runtime_set(root: Path, runtime_set_id: str, payload: bytes) -> None:
     runtime_dir = root / "xense_runtime" / runtime_set_id
     runtime_dir.mkdir(parents=True)
     runtime = runtime_dir / "runtime_OG000001"
-    reference = runtime_dir / "reference_OG000001.png"
     runtime.write_bytes(payload)
-    reference.write_bytes(b"reference")
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "runtime_set_id": runtime_set_id,
         "capture_session_id": "xcs_test",
         "generation": 0,
@@ -131,9 +129,6 @@ def add_runtime_set(root: Path, runtime_set_id: str, payload: bytes) -> None:
                 "serial": "OG000001",
                 "runtime": runtime.name,
                 "runtime_sha256": hashlib.sha256(payload).hexdigest(),
-                "reference": reference.name,
-                "reference_sha256": hashlib.sha256(b"reference").hexdigest(),
-                "reference_encoding": "bgr8",
             }
         },
     }

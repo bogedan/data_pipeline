@@ -146,7 +146,7 @@ def validate_runtime_set(source: Path, runtime_set_id: str, expected_serials: se
     if not manifest_path.is_file():
         raise FileNotFoundError(f"Missing Xense runtime manifest: {manifest_path}")
     manifest = read_json(manifest_path)
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 2:
         raise ValueError(f"Unsupported Xense runtime manifest: {manifest_path}")
     if manifest.get("runtime_set_id") != runtime_set_id:
         raise ValueError(f"Xense runtime manifest ID does not match directory: {manifest_path}")
@@ -158,7 +158,7 @@ def validate_runtime_set(source: Path, runtime_set_id: str, expected_serials: se
         if not isinstance(item, dict) or not isinstance(item.get("serial"), str):
             raise ValueError(f"Invalid Xense sensor entry {name!r}: {manifest_path}")
         actual_serials.add(item["serial"])
-        for field, hash_field in (("runtime", "runtime_sha256"), ("reference", "reference_sha256")):
+        for field, hash_field in (("runtime", "runtime_sha256"),):
             relative = item.get(field)
             if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
                 raise ValueError(f"Invalid {field} path for Xense sensor {name!r}: {manifest_path}")
