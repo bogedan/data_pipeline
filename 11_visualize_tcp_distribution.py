@@ -189,7 +189,7 @@ def main() -> None:
     output = output_root(config)
     output_episodes_path = output / "meta/episodes.jsonl"
     if not output_episodes_path.is_file():
-        raise SystemExit(f"Missing finalized dataset metadata under {output}; run 09_finalize_metadata.py first")
+        raise SystemExit(f"Missing finalized dataset metadata under {output}; run 10_finalize_metadata.py first")
     output_episode_indices = [int(episode["episode_index"]) for episode in read_jsonl(output_episodes_path)]
     source_info = read_json(source / "meta/info.json")
     layouts = resolve_arm_layouts(config, source_info)

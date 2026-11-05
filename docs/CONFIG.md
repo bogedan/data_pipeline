@@ -295,6 +295,23 @@ video:
 | `workers` | 并行转换视频的线程数。 |
 | `ffmpeg`, `ffprobe` | 可执行文件名或路径。 |
 
+## xense
+
+```yaml
+xense:
+  enabled: true
+  video: {encoder: libx264, preset: slow, pixel_format: yuv420p, workers: 1, ffmpeg: ffmpeg, ffprobe: ffprobe}
+  difference: {enabled: true, crf: 18}
+  depth: {enabled: true, crf: 0, encoding: unorm8_gray_rgb, range: [0.0, 1.0], out_of_range: error}
+  force: {enabled: true, dtype: float32}
+  force_resultant: {enabled: true, dtype: float32}
+  visualization_assets: {save_colormaps: true, save_preview_png: true}
+```
+
+Stage 09 从源数据保存的 Rectify 视频和 episode 对应的 runtime set 离线生成 Difference、Depth、Force 和 ForceResultant。求解器顺序处理全部源帧，但只输出 trim/sparsification 最终保留的帧。
+
+Depth 使用固定范围 UNORM8 编码；默认范围 `[0,1]`，越界直接报错。编码后的单通道灰度复制为 RGB，以符合 LeRobot video feature 的三通道约定。`depth.crf: 0` 只消除 H.264 的有损量化，float32 到 uint8 的基础量化仍不可逆，RGB/YUV 转换也可能引入额外误差。
+
 ## metadata
 
 ```yaml
@@ -302,7 +319,7 @@ metadata:
   video_stats_frames_per_episode: 100
 ```
 
-`video_stats_frames_per_episode` 控制 `09` 每个视频用于估计图像统计量的采样帧数，不改变视频内容。
+`video_stats_frames_per_episode` 控制 `10` 每个视频用于估计图像统计量的采样帧数，不改变视频内容。
 
 ## visualization
 
@@ -313,7 +330,7 @@ visualization:
   path_radius_m: 0.00035
 ```
 
-`with_paths` 控制 `10` 是否绘制每个 episode 的轨迹连线。其余两个值分别控制 TCP 点和轨迹线的 Rerun 显示半径，单位为米。命令行参数可以覆盖这些设置。
+`with_paths` 控制 `11` 是否绘制每个 episode 的轨迹连线。其余两个值分别控制 TCP 点和轨迹线的 Rerun 显示半径，单位为米。命令行参数可以覆盖这些设置。
 
 ## validation
 
@@ -336,7 +353,7 @@ validation:
 
 ## 阶段关闭和复跑
 
-`smoothing`、`step_limit`、`trim`、`turn_sparsification` 设置 `enabled: false` 后，对应脚本成功退出且不修改数据。
+`smoothing`、`step_limit`、`trim`、`turn_sparsification`、`xense` 设置 `enabled: false` 后，对应脚本成功退出且不修改数据。
 后续 metadata 会选择最后一个实际启用阶段生成的统计。
 
 `04` 到 `07` 会在 marker 中记录 `running` 和 `complete`。这些原地修改轨迹的阶段不能重复应用。

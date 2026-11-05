@@ -119,6 +119,15 @@ video:
   ffmpeg: ffmpeg
   ffprobe: ffprobe
 
+xense:
+  enabled: true
+  video: {encoder: libx264, preset: slow, pixel_format: yuv420p, workers: 1, ffmpeg: ffmpeg, ffprobe: ffprobe}
+  difference: {enabled: true, crf: 18}
+  depth: {enabled: true, crf: 0, encoding: unorm8_gray_rgb, range: [0.0, 1.0], out_of_range: error}
+  force: {enabled: true, dtype: float32}
+  force_resultant: {enabled: true, dtype: float32}
+  visualization_assets: {save_colormaps: true, save_preview_png: true}
+
 metadata:
   # Image statistics are sampled only for metadata; OpenPI does not normalize images with these values.
   video_stats_frames_per_episode: 100

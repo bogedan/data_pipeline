@@ -36,8 +36,9 @@ DATA_PIPELINE_PYTHON=/path/to/python ./run_data_pipeline.sh /path/to/config.yaml
 06_trim_static_segments.py
 07_sparsify_dense_turns.py
 08_convert_videos.py
-09_finalize_metadata.py
-10_visualize_tcp_distribution.py
+09_process_xense.py
+10_finalize_metadata.py
+11_visualize_tcp_distribution.py
 ```
 
 脚本使用 `set -Eeuo pipefail`，任一阶段失败会立即停止。具有 `enabled` 字段的阶段关闭时会自行成功跳过。
@@ -48,7 +49,7 @@ DATA_PIPELINE_PYTHON=/path/to/python ./run_data_pipeline.sh /path/to/config.yaml
 
 - `00` 和 `01` 的目标已存在时，由各自的 `overwrite` 决定报错或原子替换。
 - `03` 的 `output.overwrite: true` 只允许重建带 pipeline marker 的输出目录。
-- `04` 到 `07` 是原地轨迹变换，marker 为 `running` 或 `complete` 时不能重复执行。
+- `04` 到 `07` 是原地轨迹变换，`09` 原地追加 Xense 特征；marker 为 `running` 或 `complete` 时不能重复执行。
 - 原地变换中断后，从 `03` 重建输出，再按顺序继续。
 
 各配置字段见 [CONFIG.md](CONFIG.md)。

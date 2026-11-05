@@ -1,17 +1,17 @@
-# 10_visualize_tcp_distribution.py
+# 11_visualize_tcp_distribution.py
 
 将处理前和处理后的所有 episode、所有手臂 TCP 位置分别写入 Rerun 3D recording，用于对比空间分布。
 
 ## 用法
 
 ```bash
-python 10_visualize_tcp_distribution.py --config config.yaml
+python 11_visualize_tcp_distribution.py --config config.yaml
 ```
 
 可选参数：
 
 ```bash
-python 10_visualize_tcp_distribution.py \
+python 11_visualize_tcp_distribution.py \
   --config config.yaml \
   --origin-output /path/to/origin.rrd \
   --output /path/to/processed.rrd \

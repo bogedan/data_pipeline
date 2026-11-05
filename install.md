@@ -12,7 +12,7 @@ git submodule update --init data_pipeline
 cd data_pipeline
 ```
 
-如果已经能看到 `00_merge_datasets.py` 到 `10_visualize_tcp_distribution.py`，可以跳过这一步。
+如果已经能看到 `00_merge_datasets.py` 到 `11_visualize_tcp_distribution.py`，可以跳过这一步。
 
 ## 2. 安装 FFmpeg
 

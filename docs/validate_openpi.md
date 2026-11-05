@@ -9,7 +9,7 @@
 python validate_openpi.py --config config.yaml
 ```
 
-应先完成 `09_finalize_metadata.py`。
+应先完成 `10_finalize_metadata.py`。
 
 ## 静态检查
 

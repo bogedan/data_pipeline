@@ -83,6 +83,20 @@ def main() -> None:
         raise ValueError(f"Source dataset metadata has no robot_type: {source / 'meta/info.json'}")
     episodes = read_jsonl(episodes_path)
     marker = read_json(output / PIPELINE_MARKER)
+    xense_enabled = bool(config.get("xense", {}).get("enabled", False))
+    xense_report = None
+    xense_manifest: dict[int, dict] = {}
+    if xense_enabled:
+        if marker.get("xense_status") != "complete":
+            raise SystemExit("Metadata finalization requires a completed 09_process_xense.py stage")
+        report_path = work / "09_xense_report.json"
+        manifest_path = work / "09_xense_episode_manifest.jsonl"
+        if not report_path.is_file() or not manifest_path.is_file():
+            raise SystemExit(f"Missing Xense report or manifest under {work}")
+        xense_report = read_json(report_path)
+        xense_manifest = {
+            int(row["episode_index"]): row for row in read_jsonl(manifest_path)
+        }
     if bool(config.get("turn_sparsification", {}).get("enabled", False)):
         if marker.get("turn_sparsification_status") != "complete":
             raise SystemExit("Metadata finalization requires a completed 07_sparsify_dense_turns.py stage")
@@ -120,6 +134,29 @@ def main() -> None:
             if not video_path.exists():
                 raise SystemExit(f"Missing {video_path}; 08_convert_videos.py did not complete successfully")
             stats[layout.output_video_key] = sample_video_stats(video_path, sample_frames)
+        if xense_enabled:
+            if episode_index not in xense_manifest:
+                raise ValueError(f"Xense manifest has no entry for episode {episode_index}")
+            xense_row = xense_manifest[episode_index]
+            stats.update(xense_row["stats"])
+            for sensor in xense_report["sensors"]:
+                name = sensor["name"]
+                if bool(config["xense"]["difference"].get("enabled", True)):
+                    key = f"observation.images.xense_{name}_difference"
+                    path = episode_path(
+                        output, source_info["video_path"], episode_index, chunks_size, video_key=key
+                    )
+                    if not path.is_file():
+                        raise SystemExit(f"Missing {path}; 09_process_xense.py did not complete successfully")
+                    stats[key] = sample_video_stats(path, sample_frames)
+                if bool(config["xense"]["depth"].get("enabled", True)):
+                    key = f"observation.images.xense_{name}_depth"
+                    path = episode_path(
+                        output, source_info["video_path"], episode_index, chunks_size, video_key=key
+                    )
+                    if not path.is_file():
+                        raise SystemExit(f"Missing {path}; 09_process_xense.py did not complete successfully")
+                    stats[key] = sample_video_stats(path, sample_frames)
         episode_stats.append({"episode_index": episode_index, "stats": stats})
         print(f"[{number}/{len(episodes)}] metadata episode {episode_index:06d}")
     write_jsonl(output / "meta/episodes_stats.jsonl", episode_stats)
@@ -156,10 +193,52 @@ def main() -> None:
             },
         } for layout in layouts
     }
+    xense_video_features = {}
+    xense_tensor_features = {}
+    if xense_enabled:
+        first_xense_row = xense_manifest[int(episodes[0]["episode_index"])]
+        xense_pixel_format = str(config["xense"]["video"].get("pixel_format", "yuv420p"))
+        for sensor in xense_report["sensors"]:
+            name = sensor["name"]
+            shapes = first_xense_row["sensors"][name]["shapes"]
+            if bool(config["xense"]["difference"].get("enabled", True)):
+                height, width, channels = map(int, shapes["Difference"])
+                key = f"observation.images.xense_{name}_difference"
+                xense_video_features[key] = {
+                    "dtype": "video", "shape": [height, width, channels],
+                    "names": ["height", "width", "channels"],
+                    "info": {
+                        "video.height": height, "video.width": width, "video.codec": "h264",
+                        "video.pix_fmt": xense_pixel_format, "video.is_depth_map": False,
+                        "video.fps": int(source_info["fps"]), "video.channels": channels,
+                        "has_audio": False,
+                    },
+                }
+            if bool(config["xense"]["depth"].get("enabled", True)):
+                height, width = map(int, shapes["Depth"])
+                key = f"observation.images.xense_{name}_depth"
+                xense_video_features[key] = {
+                    "dtype": "video", "shape": [height, width, 3],
+                    "names": ["height", "width", "channels"],
+                    "info": {
+                        "video.height": height, "video.width": width, "video.codec": "h264",
+                        "video.pix_fmt": xense_pixel_format, "video.is_depth_map": True,
+                        "video.fps": int(source_info["fps"]), "video.channels": 3,
+                        "has_audio": False,
+                        "depth.encoding": "unorm8_gray_rgb",
+                        "depth.encoding_asset": "assets/xense/depth_encoding.json",
+                    },
+                }
+        for key, shape in xense_report["field_shapes"].items():
+            xense_tensor_features[key] = {
+                "dtype": "float32", "shape": [int(value) for value in shape], "names": None,
+            }
     features = {
         "observation.state": {"dtype": "float32", "shape": [state_size], "names": [state_names]},
         "action": {"dtype": "float32", "shape": [state_size], "names": [state_names]},
         **video_features,
+        **xense_video_features,
+        **xense_tensor_features,
         **scalar_features,
     }
     tasks = read_jsonl(output / "meta/tasks.jsonl")
@@ -169,7 +248,7 @@ def main() -> None:
         "total_episodes": len(episodes),
         "total_frames": total_frames,
         "total_tasks": len(tasks),
-        "total_videos": len(episodes) * len(layouts),
+        "total_videos": len(episodes) * (len(layouts) + len(xense_video_features)),
         "total_chunks": (len(episodes) + chunks_size - 1) // chunks_size,
         "chunks_size": chunks_size,
         "fps": int(source_info["fps"]),

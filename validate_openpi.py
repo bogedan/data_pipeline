@@ -42,6 +42,16 @@ def probe_video(path: Path, ffprobe: str) -> dict:
     return json.loads(result.stdout)["streams"][0]
 
 
+def expected_video_size(feature: dict) -> tuple[int, int]:
+    details = feature.get("info", {})
+    if "video.width" in details and "video.height" in details:
+        return int(details["video.width"]), int(details["video.height"])
+    shape = feature.get("shape")
+    if isinstance(shape, list) and len(shape) == 3:
+        return int(shape[1]), int(shape[0])
+    raise ValueError(f"Video feature has no valid dimensions: {feature}")
+
+
 def validate_lerobot_loader(root: Path, fps: int, horizon: int, openpi_root: Path, state_size: int, video_keys: list[str]) -> None:
     sys.path.insert(0, str(openpi_root / "src"))
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
@@ -78,7 +88,7 @@ def main() -> None:
             "TCP steps, rotations, videos, and the LeRobot action-chunk loader."
         ),
         epilog=(
-            "Run 09_finalize_metadata.py before this command. The validation report is written to "
+            "Run 10_finalize_metadata.py before this command. The validation report is written to "
             "<derived-output>/work/validation_report.json."
         ),
     )
@@ -92,7 +102,7 @@ def main() -> None:
     root = output_root(config)
     info_path = root / "meta/info.json"
     if not info_path.exists():
-        raise SystemExit(f"Missing {info_path}; run 09_finalize_metadata.py successfully before validation")
+        raise SystemExit(f"Missing {info_path}; run 10_finalize_metadata.py successfully before validation")
     info = read_json(info_path)
     episodes = read_jsonl(root / "meta/episodes.jsonl")
     chunks_size = int(info["chunks_size"])
@@ -164,7 +174,7 @@ def main() -> None:
             video_path = episode_path(root, info["video_path"], episode_index, chunks_size, video_key=video_key)
             try:
                 stream = probe_video(video_path, str(config["video"]["ffprobe"]))
-                expected_size = (int(config["video"]["width"]), int(config["video"]["height"]))
+                expected_size = expected_video_size(info["features"][video_key])
                 if (int(stream["width"]), int(stream["height"])) != expected_size:
                     errors.append(f"Episode {episode_index}: {video_key} size mismatch: {stream}")
                 if int(stream["nb_read_frames"]) != len(state):

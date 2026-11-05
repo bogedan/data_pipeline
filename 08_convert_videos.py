@@ -9,12 +9,13 @@ import subprocess
 
 from pipeline_common import episode_path
 from pipeline_common import load_config
+from pipeline_common import load_frame_selection_manifests
 from pipeline_common import output_root
 from pipeline_common import read_json
 from pipeline_common import read_jsonl
+from pipeline_common import selected_source_frame_indices
 from pipeline_common import source_root
 from pipeline_common import resolve_arm_layouts
-from pipeline_common import work_root
 
 
 def frame_select_expression(indices: list[int]) -> str:
@@ -84,31 +85,32 @@ def main() -> None:
     layouts = resolve_arm_layouts(config, source_info)
     ffmpeg = str(config["video"]["ffmpeg"])
     commands: list[tuple[list[str], Path, Path, int, str]] = []
-    trim_by_episode: dict[int, dict] = {}
-    if bool(config.get("trim", {}).get("enabled", False)):
-        manifest_path = work_root(config) / "06_trim_manifest.jsonl"
-        if not manifest_path.exists():
-            raise SystemExit(f"Missing {manifest_path}; run 06_trim_static_segments.py first")
-        trim_by_episode = {int(row["episode_index"]): row for row in read_jsonl(manifest_path)}
-    sparsification_by_episode: dict[int, dict] = {}
-    if bool(config.get("turn_sparsification", {}).get("enabled", False)):
-        manifest_path = work_root(config) / "07_turn_sparsification_manifest.jsonl"
-        if not manifest_path.exists():
-            raise SystemExit(f"Missing {manifest_path}; run 07_sparsify_dense_turns.py first")
-        sparsification_by_episode = {int(row["episode_index"]): row for row in read_jsonl(manifest_path)}
+    trim_by_episode, sparsification_by_episode = load_frame_selection_manifests(config)
+    source_episodes = {
+        int(row["episode_index"]): row
+        for row in read_jsonl(source / "meta/episodes.jsonl")
+    }
 
     for episode in episodes:
         episode_index = int(episode["episode_index"])
-        trim_bounds = None
-        if trim_by_episode:
-            if episode_index not in trim_by_episode:
-                raise RuntimeError(f"Trim manifest has no entry for episode {episode_index}")
-            trim_bounds = trim_by_episode[episode_index]
-        kept_trimmed_indices = None
-        if sparsification_by_episode:
-            if episode_index not in sparsification_by_episode:
-                raise RuntimeError(f"Turn sparsification manifest has no entry for episode {episode_index}")
-            kept_trimmed_indices = sparsification_by_episode[episode_index]["kept_trimmed_frame_indices"]
+        source_length = int(source_episodes[episode_index]["length"])
+        source_indices = selected_source_frame_indices(
+            config,
+            episode_index,
+            source_length,
+            trim_by_episode=trim_by_episode,
+            sparsification_by_episode=sparsification_by_episode,
+        )
+        if len(source_indices) != int(episode["length"]):
+            raise RuntimeError(
+                f"Episode {episode_index} selects {len(source_indices)} video frames, "
+                f"but final Parquet contains {episode['length']} rows"
+            )
+        trim_bounds = trim_by_episode.get(episode_index)
+        kept_trimmed_indices = (
+            sparsification_by_episode[episode_index]["kept_trimmed_frame_indices"]
+            if episode_index in sparsification_by_episode else None
+        )
         for layout in layouts:
             source_path = episode_path(
                 source, source_info["video_path"], episode_index, source_chunks_size, video_key=layout.source_video_key

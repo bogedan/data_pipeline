@@ -46,8 +46,9 @@ episode 最后一帧没有未来观测，因此重复最后一个 pose，以保�
 06_trim_static_segments.py       在处理后轨迹上裁掉首尾长静止段，重建索引/action
 07_sparsify_dense_turns.py       只减少拐弯处空间距离过密的点
 08_convert_videos.py             转换 arms 绑定的 MVS 相机并编码为 240x240 H.264
-09_finalize_metadata.py          生成 info、episodes_stats 和全局 stats
-10_visualize_tcp_distribution.py 将全部 episode 的 TCP 点云写入一个 Rerun RRD
+09_process_xense.py              从 Rectify + runtime 离线生成 Difference/Depth/Force
+10_finalize_metadata.py          生成 info、episodes_stats 和全局 stats
+11_visualize_tcp_distribution.py 将全部 episode 的 TCP 点云写入一个 Rerun RRD
 validate_openpi.py               独立验证最终数据集和 OpenPI loader
 ```
 
@@ -81,6 +82,7 @@ validate_openpi.py               独立验证最终数据集和 OpenPI loader
 - `step_limit.position_tolerance_mm`：位置步长限制允许的数值余量，单位为毫米；
 - `step_limit.rotation_tolerance_deg`：旋转步长限制允许的数值余量，单位为度；
 - `task.prompt`：训练指令；
+- `xense.enabled`：是否在最终帧筛选后离线生成 Xense 训练特征；
 - `visualization.point_radius_m`：TCP 点云中每个点的显示半径；
 - `visualization.with_paths`：是否绘制每个 episode 的轨迹连线；
 - `visualization.path_radius_m`：轨迹线的显示半径。

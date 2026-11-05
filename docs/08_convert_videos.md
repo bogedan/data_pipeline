@@ -30,4 +30,4 @@ python 08_convert_videos.py --config config.yaml
 
 ## 输出
 
-视频写入 `<最终输出目录>` 的 `video_path` 模板位置。该阶段不修改 parquet 和 metadata；最终视频特征由 `09` 写入。
+视频写入 `<最终输出目录>` 的 `video_path` 模板位置。该阶段不修改 parquet 和 metadata；最终视频特征由 `10` 写入。

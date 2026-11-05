@@ -1,11 +1,11 @@
-# 09_finalize_metadata.py
+# 10_finalize_metadata.py
 
 根据最终 parquet 和视频生成完整的 LeRobot v2.1 metadata 与统计信息，并将 pipeline marker 标记为完成。
 
 ## 用法
 
 ```bash
-python 09_finalize_metadata.py --config config.yaml
+python 10_finalize_metadata.py --config config.yaml
 ```
 
 ## 前置条件
@@ -13,6 +13,7 @@ python 09_finalize_metadata.py --config config.yaml
 - `03` 已生成输出数据集。
 - 所有配置为 enabled 的轨迹处理阶段已经完成。
 - `08` 已生成每个 episode、每条手臂的视频。
+- 启用 `xense` 时，`09` 已生成 Xense 视频、Parquet 字段和 manifest。
 
 脚本自动选择最后一个启用阶段的 `*_partial_episode_stats.jsonl` 作为 parquet 统计来源。
 

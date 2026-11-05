@@ -23,6 +23,7 @@ from pipeline_common import sample_trajectory_prefix
 from pipeline_common import source_state_to_trajectory
 from pipeline_common import sparsify_trajectory_turns
 from pipeline_common import step_limit_tolerances
+from pipeline_common import selected_source_frame_indices
 
 
 def test_work_root_is_inside_output_dataset(tmp_path) -> None:
@@ -54,6 +55,34 @@ def test_action_shift_repeats_tail() -> None:
     np.testing.assert_array_equal(action[0], pose[1])
     np.testing.assert_array_equal(action[1], pose[2])
     np.testing.assert_array_equal(action[2], pose[2])
+
+
+def test_selected_source_frame_indices_composes_trim_and_sparsification() -> None:
+    config = {"trim": {"enabled": True}, "turn_sparsification": {"enabled": True}}
+    trim = {3: {"original_length": 10, "start_frame": 2, "end_frame": 8}}
+    sparse = {3: {"kept_trimmed_frame_indices": [0, 2, 5]}}
+
+    assert selected_source_frame_indices(
+        config,
+        3,
+        10,
+        trim_by_episode=trim,
+        sparsification_by_episode=sparse,
+    ) == [2, 4, 7]
+
+
+def test_selected_source_frame_indices_rejects_unsorted_indices() -> None:
+    config = {"trim": {"enabled": False}, "turn_sparsification": {"enabled": True}}
+    sparse = {0: {"kept_trimmed_frame_indices": [2, 1]}}
+
+    try:
+        selected_source_frame_indices(
+            config, 0, 4, trim_by_episode={}, sparsification_by_episode=sparse
+        )
+    except ValueError as error:
+        assert "sorted" in str(error)
+    else:
+        raise AssertionError("Expected unsorted frame indices to be rejected")
 
 
 def test_disabled_pose_transform_is_identity() -> None:

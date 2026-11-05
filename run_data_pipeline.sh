@@ -31,8 +31,9 @@ stages=(
   06_trim_static_segments.py
   07_sparsify_dense_turns.py
   08_convert_videos.py
-  09_finalize_metadata.py
-  10_visualize_tcp_distribution.py
+  09_process_xense.py
+  10_finalize_metadata.py
+  11_visualize_tcp_distribution.py
 )
 
 for stage in "${stages[@]}"; do

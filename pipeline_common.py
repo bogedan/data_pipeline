@@ -193,6 +193,74 @@ def work_root(config: dict[str, Any]) -> Path:
     return output_root(config) / "work"
 
 
+def selected_source_frame_indices(
+    config: dict[str, Any],
+    episode_index: int,
+    source_length: int,
+    *,
+    trim_by_episode: dict[int, dict[str, Any]] | None = None,
+    sparsification_by_episode: dict[int, dict[str, Any]] | None = None,
+) -> list[int]:
+    """Map one final Episode back to its original source-video frame indices."""
+    if source_length < 1:
+        raise ValueError(f"Episode {episode_index} has invalid source length {source_length}")
+
+    start, end = 0, source_length
+    if bool(config.get("trim", {}).get("enabled", False)):
+        if trim_by_episode is None or episode_index not in trim_by_episode:
+            raise ValueError(f"Trim manifest has no entry for episode {episode_index}")
+        row = trim_by_episode[episode_index]
+        if int(row.get("original_length", source_length)) != source_length:
+            raise ValueError(
+                f"Episode {episode_index} trim manifest source length "
+                f"{row.get('original_length')} does not match {source_length}"
+            )
+        start, end = int(row["start_frame"]), int(row["end_frame"])
+        if not 0 <= start < end <= source_length:
+            raise ValueError(
+                f"Episode {episode_index} has invalid trim interval [{start}, {end}) "
+                f"for {source_length} source frames"
+            )
+
+    indices = list(range(start, end))
+    if bool(config.get("turn_sparsification", {}).get("enabled", False)):
+        if sparsification_by_episode is None or episode_index not in sparsification_by_episode:
+            raise ValueError(f"Turn sparsification manifest has no entry for episode {episode_index}")
+        kept = [int(value) for value in sparsification_by_episode[episode_index]["kept_trimmed_frame_indices"]]
+        if not kept or kept != sorted(set(kept)):
+            raise ValueError(
+                f"Episode {episode_index} sparsification indices must be non-empty, sorted, and unique"
+            )
+        if kept[0] < 0 or kept[-1] >= len(indices):
+            raise ValueError(
+                f"Episode {episode_index} sparsification index {kept[-1]} is outside "
+                f"the {len(indices)} retained trim frames"
+            )
+        indices = [indices[value] for value in kept]
+    return indices
+
+
+def load_frame_selection_manifests(
+    config: dict[str, Any],
+) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
+    trim_by_episode: dict[int, dict[str, Any]] = {}
+    if bool(config.get("trim", {}).get("enabled", False)):
+        path = work_root(config) / "06_trim_manifest.jsonl"
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing {path}; run 06_trim_static_segments.py first")
+        trim_by_episode = {int(row["episode_index"]): row for row in read_jsonl(path)}
+
+    sparsification_by_episode: dict[int, dict[str, Any]] = {}
+    if bool(config.get("turn_sparsification", {}).get("enabled", False)):
+        path = work_root(config) / "07_turn_sparsification_manifest.jsonl"
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing {path}; run 07_sparsify_dense_turns.py first")
+        sparsification_by_episode = {
+            int(row["episode_index"]): row for row in read_jsonl(path)
+        }
+    return trim_by_episode, sparsification_by_episode
+
+
 def read_json(path: Path) -> Any:
     with path.open(encoding="utf-8") as stream:
         return json.load(stream)
