@@ -231,6 +231,37 @@ def validate_roi(value: Any, frame_size: tuple[int, int]) -> tuple[int, int, int
     return x, y, width, height
 
 
+def camera_frame_origin(
+    camera_yaml: dict[str, Any],
+    frame_size: tuple[int, int],
+    camera_path: Path,
+) -> tuple[int, int]:
+    image = camera_yaml.get("image")
+    if not isinstance(image, dict):
+        raise ValueError(f"Camera calibration is missing image dimensions: {camera_path}")
+    native_size = (int(image["width"]), int(image["height"]))
+    if frame_size == native_size:
+        return 0, 0
+
+    crop = camera_yaml.get("fisheye_crop")
+    crop_size = None
+    if isinstance(crop, dict):
+        crop_size = (int(crop["output_width"]), int(crop["output_height"]))
+        if frame_size == crop_size:
+            return (
+                round(float(crop["center_x"])) - crop_size[0] // 2,
+                round(float(crop["center_y"])) - crop_size[1] // 2,
+            )
+
+    expected = f"native {native_size[0]}x{native_size[1]}"
+    if crop_size is not None:
+        expected += f" or crop {crop_size[0]}x{crop_size[1]}"
+    raise ValueError(
+        f"Recorded frame size {frame_size[0]}x{frame_size[1]} does not match "
+        f"camera calibration ({expected}): {camera_path}"
+    )
+
+
 def load_detector(
     root: Path,
     config: dict[str, Any],
@@ -268,14 +299,7 @@ def load_detector(
     distortion = np.asarray(camera_yaml["dist_coeffs"], dtype=np.float64).reshape(-1, 1)
     if camera.shape != (3, 3) or distortion.shape != (4, 1) or not np.isfinite(camera).all() or not np.isfinite(distortion).all():
         raise ValueError(f"Invalid camera matrix or distortion: {camera_path}")
-    crop = camera_yaml.get("fisheye_crop")
-    if crop is None:
-        crop_x, crop_y = 0, 0
-    else:
-        if (int(crop["output_width"]), int(crop["output_height"])) != (frame_width, frame_height):
-            raise ValueError(f"Recorded frame size differs from camera crop: {camera_path}")
-        crop_x = round(float(crop["center_x"])) - int(crop["output_width"]) // 2
-        crop_y = round(float(crop["center_y"])) - int(crop["output_height"]) // 2
+    crop_x, crop_y = camera_frame_origin(camera_yaml, (frame_width, frame_height), camera_path)
     local_camera = camera.copy()
     local_camera[0, 2] -= crop_x + roi[0]
     local_camera[1, 2] -= crop_y + roi[1]

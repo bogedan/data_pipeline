@@ -19,6 +19,7 @@ merge_module = importlib.import_module("00_merge_datasets")
 width_module = importlib.import_module("01_add_gripper_width")
 ArmBinding = width_module.ArmBinding
 add_or_overwrite = width_module.add_or_overwrite
+camera_frame_origin = width_module.camera_frame_origin
 output_names = width_module.output_names
 resolve_bindings = width_module.resolve_bindings
 discover_inputs = merge_module.discover_inputs
@@ -236,6 +237,43 @@ def test_add_and_overwrite_width_modes() -> None:
     overwritten = add_or_overwrite(added, {"gripper_right": np.asarray([0.3, 0.4])}, [binding], output_names(names, [binding]), "overwrite")
     assert overwritten.shape == added.shape
     np.testing.assert_allclose(overwritten[:, -1], [0.3, 0.4])
+
+
+def test_camera_frame_origin_accepts_native_uncropped_frames() -> None:
+    camera_yaml = {
+        "image": {"width": 1440, "height": 1080},
+        "fisheye_crop": {
+            "center_x": 720.0, "center_y": 540.0,
+            "output_width": 1080, "output_height": 1080,
+        },
+    }
+
+    assert camera_frame_origin(camera_yaml, (1440, 1080), Path("camera.yaml")) == (0, 0)
+
+
+def test_camera_frame_origin_applies_crop_to_cropped_frames() -> None:
+    camera_yaml = {
+        "image": {"width": 1440, "height": 1080},
+        "fisheye_crop": {
+            "center_x": 700.6, "center_y": 530.4,
+            "output_width": 1080, "output_height": 1000,
+        },
+    }
+
+    assert camera_frame_origin(camera_yaml, (1080, 1000), Path("camera.yaml")) == (161, 30)
+
+
+def test_camera_frame_origin_rejects_unknown_frame_size() -> None:
+    camera_yaml = {
+        "image": {"width": 1440, "height": 1080},
+        "fisheye_crop": {
+            "center_x": 720.0, "center_y": 540.0,
+            "output_width": 1080, "output_height": 1080,
+        },
+    }
+
+    with pytest.raises(ValueError, match=r"1280x720.*native 1440x1080 or crop 1080x1080"):
+        camera_frame_origin(camera_yaml, (1280, 720), Path("camera.yaml"))
 
 
 def test_dual_arm_widths_follow_right_then_left_tcp() -> None:
