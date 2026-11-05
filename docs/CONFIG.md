@@ -302,15 +302,17 @@ xense:
   enabled: true
   video: {encoder: libx264, preset: slow, pixel_format: yuv420p, workers: 1, ffmpeg: ffmpeg, ffprobe: ffprobe}
   difference: {enabled: true, crf: 18}
-  depth: {enabled: true, crf: 0, encoding: unorm8_gray_rgb, range: [0.0, 1.0], out_of_range: error}
-  force: {enabled: true, dtype: float32}
+  depth: {enabled: true, crf: 0, encoding: unorm8_gray_rgb, range: [0.0, 1.0], out_of_range: clip}
+  force: {parquet: true, video: true, dtype: float32, crf: 0, encoding: dataset_minmax_uint8_rgb}
   force_resultant: {enabled: true, dtype: float32}
   visualization_assets: {save_colormaps: true, save_preview_png: true}
 ```
 
 Stage 09 从源数据保存的 Rectify 视频和 episode 对应的 runtime set 离线生成 Difference、Depth、Force 和 ForceResultant。求解器顺序处理全部源帧，但只输出 trim/sparsification 最终保留的帧。
 
-Depth 使用固定范围 UNORM8 编码；默认范围 `[0,1]`，越界直接报错。编码后的单通道灰度复制为 RGB，以符合 LeRobot video feature 的三通道约定。`depth.crf: 0` 只消除 H.264 的有损量化，float32 到 uint8 的基础量化仍不可逆，RGB/YUV 转换也可能引入额外误差。
+Depth 使用固定范围 UNORM8 编码；默认范围 `[0,1]`，越界值裁剪到范围并记录计数。编码后的单通道灰度复制为 RGB，以符合 LeRobot video feature 的三通道约定。`depth.crf: 0` 只消除 H.264 的有损量化，float32 到 uint8 的基础量化仍不可逆，RGB/YUV 转换也可能引入额外误差。
+
+Force 的 `parquet` 和 `video` 可分别开关。视频在整个输出数据集的选中帧上，按逻辑传感器和 XYZ 通道使用完整 min/max 映射到 uint8 RGB；`35x20` 会复制最后一行补成 `36x20` 以兼容 `yuv420p`。映射范围保存在 `assets/xense/force_encoding.json`。
 
 ## metadata
 

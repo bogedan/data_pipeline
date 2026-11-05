@@ -157,6 +157,14 @@ def main() -> None:
                     if not path.is_file():
                         raise SystemExit(f"Missing {path}; 09_process_xense.py did not complete successfully")
                     stats[key] = sample_video_stats(path, sample_frames)
+                if bool(config["xense"]["force"].get("video", False)):
+                    key = f"observation.images.xense_{name}_force"
+                    path = episode_path(
+                        output, source_info["video_path"], episode_index, chunks_size, video_key=key
+                    )
+                    if not path.is_file():
+                        raise SystemExit(f"Missing {path}; 09_process_xense.py did not complete successfully")
+                    stats[key] = sample_video_stats(path, sample_frames)
         episode_stats.append({"episode_index": episode_index, "stats": stats})
         print(f"[{number}/{len(episodes)}] metadata episode {episode_index:06d}")
     write_jsonl(output / "meta/episodes_stats.jsonl", episode_stats)
@@ -227,6 +235,21 @@ def main() -> None:
                         "has_audio": False,
                         "depth.encoding": "unorm8_gray_rgb",
                         "depth.encoding_asset": "assets/xense/depth_encoding.json",
+                    },
+                }
+            if bool(config["xense"]["force"].get("video", False)):
+                height, width, channels = map(int, xense_report["force_video_shape"])
+                key = f"observation.images.xense_{name}_force"
+                xense_video_features[key] = {
+                    "dtype": "video", "shape": [height, width, channels],
+                    "names": ["height", "width", "channels"],
+                    "info": {
+                        "video.height": height, "video.width": width, "video.codec": "h264",
+                        "video.pix_fmt": xense_pixel_format, "video.is_depth_map": False,
+                        "video.fps": int(source_info["fps"]), "video.channels": channels,
+                        "has_audio": False,
+                        "force.encoding": "dataset_minmax_uint8_rgb",
+                        "force.encoding_asset": "assets/xense/force_encoding.json",
                     },
                 }
         for key, shape in xense_report["field_shapes"].items():
