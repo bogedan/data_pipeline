@@ -110,7 +110,7 @@ turn_sparsification:
 video:
   width: 240
   height: 240
-  crop_mode: center_square  # center_square or stretch
+  crop_mode: auto  # auto, center_square, or stretch
   codec: libx264
   crf: 18
   preset: medium

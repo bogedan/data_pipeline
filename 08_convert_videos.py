@@ -7,7 +7,10 @@ from concurrent.futures import as_completed
 from pathlib import Path
 import subprocess
 
+import yaml
+
 from pipeline_common import episode_path
+from pipeline_common import find_task_config
 from pipeline_common import load_config
 from pipeline_common import load_frame_selection_manifests
 from pipeline_common import output_root
@@ -16,6 +19,20 @@ from pipeline_common import read_jsonl
 from pipeline_common import selected_source_frame_indices
 from pipeline_common import source_root
 from pipeline_common import resolve_arm_layouts
+
+
+def resolve_crop_mode(config: dict, task: dict, mvs_name: str) -> str:
+    mode = config["video"].get("crop_mode", "auto")
+    if mode != "auto":
+        return str(mode)
+    try:
+        camera = task["robot"]["mvs"][mvs_name]
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"Cannot resolve acquisition crop setting for MVS {mvs_name!r}") from error
+    crop_enabled = camera.get("crop", True)
+    if not isinstance(crop_enabled, bool):
+        raise ValueError(f"robot.mvs.{mvs_name}.crop must be a boolean")
+    return "center_square" if crop_enabled else "stretch"
 
 
 def frame_select_expression(indices: list[int]) -> str:
@@ -36,17 +53,22 @@ def frame_select_expression(indices: list[int]) -> str:
 
 def video_filter(
     config: dict,
+    crop_mode: str,
     trim_bounds: dict | None = None,
     kept_trimmed_indices: list[int] | None = None,
     fps: float | None = None,
 ) -> str:
     video = config["video"]
     width, height = int(video["width"]), int(video["height"])
-    mode = video.get("crop_mode", "center_square")
+    mode = crop_mode
+    scale = (
+        f"scale={width}:{height}:flags=lanczos:"
+        "force_original_aspect_ratio=disable,setsar=1"
+    )
     if mode == "center_square":
-        spatial = f"crop='min(iw,ih)':'min(iw,ih)',scale={width}:{height}:flags=lanczos"
+        spatial = f"crop='min(iw,ih)':'min(iw,ih)',{scale}"
     elif mode == "stretch":
-        spatial = f"scale={width}:{height}:flags=lanczos"
+        spatial = scale
     else:
         raise ValueError(f"Unsupported video.crop_mode: {mode!r}")
     if kept_trimmed_indices is not None:
@@ -83,6 +105,8 @@ def main() -> None:
     source_chunks_size = int(source_info.get("chunks_size", 1000))
     output_chunks_size = int(config["output"].get("chunks_size", 1000))
     layouts = resolve_arm_layouts(config, source_info)
+    with find_task_config(config).open(encoding="utf-8") as stream:
+        task = yaml.safe_load(stream)
     ffmpeg = str(config["video"]["ffmpeg"])
     commands: list[tuple[list[str], Path, Path, int, str]] = []
     trim_by_episode, sparsification_by_episode = load_frame_selection_manifests(config)
@@ -112,6 +136,7 @@ def main() -> None:
             if episode_index in sparsification_by_episode else None
         )
         for layout in layouts:
+            crop_mode = resolve_crop_mode(config, task, layout.mvs_name)
             source_path = episode_path(
                 source, source_info["video_path"], episode_index, source_chunks_size, video_key=layout.source_video_key
             )
@@ -121,7 +146,7 @@ def main() -> None:
             temporary = output_path.with_suffix(".tmp.mp4")
             command = [
                 ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source_path), "-an", "-vf",
-                video_filter(config, trim_bounds, kept_trimmed_indices, float(source_info["fps"])),
+                video_filter(config, crop_mode, trim_bounds, kept_trimmed_indices, float(source_info["fps"])),
                 "-c:v", str(config["video"]["codec"]), "-preset", str(config["video"]["preset"]),
                 "-crf", str(config["video"]["crf"]), "-pix_fmt", str(config["video"]["pixel_format"]),
                 "-vsync", "0", "-movflags", "+faststart", "-f", "mp4", str(temporary),

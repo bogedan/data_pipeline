@@ -274,7 +274,7 @@ turn_sparsification:
 video:
   width: 240
   height: 240
-  crop_mode: center_square
+  crop_mode: auto
   codec: libx264
   crf: 18
   preset: medium
@@ -287,7 +287,7 @@ video:
 | 字段 | 说明 |
 | --- | --- |
 | `width`, `height` | 输出视频分辨率。 |
-| `crop_mode` | `center_square` 先居中裁成正方形，`stretch` 直接缩放。 |
+| `crop_mode` | `auto` 按归档采集配置的 MVS `crop` 字段选择；`center_square` 先居中裁成正方形；`stretch` 不保留原始宽高比直接缩放。输出视频统一为方形像素。 |
 | `codec` | ffmpeg 视频编码器。 |
 | `crf` | 编码质量参数，libx264 中数值越低质量越高、文件越大。 |
 | `preset` | 编码速度和压缩率预设。 |

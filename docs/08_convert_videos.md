@@ -19,8 +19,10 @@ python 08_convert_videos.py --config config.yaml
 
 ## 视频处理
 
-- `center_square`：居中裁成正方形后缩放。
-- `stretch`：直接缩放到目标尺寸。
+- `auto`：读取归档采集配置中的 `robot.mvs.<name>.crop`；关闭裁剪时直接缩放，开启时按方形输入缩放。
+- `center_square`：居中裁成正方形后缩放（显式覆盖）。
+- `stretch`：不保留原始宽高比，直接缩放到目标尺寸。
+- 输出统一使用方形像素（`SAR=1:1`），确保视频显示比例与配置的宽高一致。
 - 使用配置的 codec、CRF、preset 和 pixel format 编码 MP4。
 - 删除音轨。
 - 稀疏化后用 ffmpeg `select` 精确选帧，并按源 FPS 重建时间戳。
