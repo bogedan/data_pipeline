@@ -229,7 +229,7 @@ trim:
 | `pre_roll_frames` | 检测到运动前额外保留的帧数。 |
 | `post_roll_frames` | 最后运动后额外保留的帧数。 |
 | `min_active_frames` | 连续达到阈值后才认为是有效运动。 |
-| `min_episode_frames` | 裁剪后允许的最少帧数。 |
+| `min_episode_frames` | 原始帧数低于该值时不裁剪；其他 Episode 的裁剪结果也不会低于该帧数。 |
 
 ## turn_sparsification
 

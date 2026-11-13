@@ -19,7 +19,7 @@ python 06_trim_static_segments.py --config config.yaml
 - 夹爪变化达到 `gripper_threshold_rad`。
 
 任一项连续满足 `min_active_frames` 才视为有效运动。检测边界外额外保留 `pre_roll_frames` 和
-`post_roll_frames`，并保证结果不少于 `min_episode_frames`。
+`post_roll_frames`。原始帧数低于 `min_episode_frames` 的 Episode 会完全跳过裁剪；其余 Episode 的裁剪结果也保证不少于该值。
 
 ## 输出
 

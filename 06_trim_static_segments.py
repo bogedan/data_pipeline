@@ -66,6 +66,20 @@ def episode_stats(table: pa.Table, state: np.ndarray, action: np.ndarray) -> dic
     return stats
 
 
+def short_episode_trim_plan(length: int, minimum_episode_frames: int) -> tuple[int, int, dict[str, int | str]]:
+    """Keep short episodes intact while preserving the manifest schema."""
+    return 0, length, {
+        "original_length": length,
+        "start_frame": 0,
+        "end_frame": length,
+        "trimmed_length": length,
+        "trimmed_head_frames": 0,
+        "trimmed_tail_frames": 0,
+        "skipped": "short_episode",
+        "minimum_episode_frames": minimum_episode_frames,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Trim long static prefixes and suffixes from converted episodes.")
     parser.add_argument("--config", default="config.yaml")
@@ -105,6 +119,7 @@ def main() -> None:
         "min_episode_frames": int(trim.get("min_episode_frames", config["validation"]["action_horizon"])),
         "min_active_frames": int(trim.get("min_active_frames", 1)),
     }
+    minimum_episode_frames = bounds_kwargs["min_episode_frames"]
 
     # Validate every episode before changing any parquet. This ensures that a bad
     # threshold or all-static episode fails without leaving a partially trimmed dataset.
@@ -114,10 +129,13 @@ def main() -> None:
         path = episode_path(output, source_info["data_path"], episode_index, chunks_size)
         table = pq.read_table(path, columns=["observation.state"])
         state = np.asarray(table["observation.state"].combine_chunks().to_pylist(), dtype=np.float32)
-        try:
-            start, end, details = find_trajectory_trim_bounds(state, **bounds_kwargs)
-        except ValueError as error:
-            raise ValueError(f"Episode {episode_index}: {error}") from error
+        if len(state) < minimum_episode_frames:
+            start, end, details = short_episode_trim_plan(len(state), minimum_episode_frames)
+        else:
+            try:
+                start, end, details = find_trajectory_trim_bounds(state, **bounds_kwargs)
+            except ValueError as error:
+                raise ValueError(f"Episode {episode_index}: {error}") from error
         plans.append({"path": path, "start": start, "end": end, "details": details})
 
     marker["trim_status"] = "running"
@@ -156,6 +174,7 @@ def main() -> None:
             f"[{number}/{len(episodes)}] trim episode {episode_index:06d}: "
             f"{details['original_length']} -> {details['trimmed_length']} "
             f"(head -{details['trimmed_head_frames']}, tail -{details['trimmed_tail_frames']})"
+            f"{' [skipped: short episode]' if details.get('skipped') else ''}"
         )
 
     write_jsonl(work / "06_trim_manifest.jsonl", manifest)
@@ -167,6 +186,7 @@ def main() -> None:
         "frames_after": sum(int(item["trimmed_length"]) for item in manifest),
         "trimmed_head_frames": sum(int(item["trimmed_head_frames"]) for item in manifest),
         "trimmed_tail_frames": sum(int(item["trimmed_tail_frames"]) for item in manifest),
+        "skipped_short_episodes": sum(item.get("skipped") == "short_episode" for item in manifest),
         "thresholds": bounds_kwargs,
     }
     write_json(work / "06_trim_report.json", report)
