@@ -76,7 +76,7 @@ video:
   ffmpeg: ffmpeg
   ffprobe: ffprobe
 metadata:
-  video_stats_frames_per_episode: 100
+  video_stats_frames_per_episode: 32
 visualization:
   with_paths: true
   point_radius_m: 0.0012

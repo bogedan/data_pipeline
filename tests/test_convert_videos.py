@@ -8,6 +8,7 @@ import pytest
 convert_videos = importlib.import_module("08_convert_videos")
 resolve_crop_mode = convert_videos.resolve_crop_mode
 video_filter = convert_videos.video_filter
+stats_filter = convert_videos.stats_filter
 
 
 @pytest.mark.parametrize(
@@ -52,3 +53,10 @@ def test_auto_crop_mode_uses_camera_default_when_crop_is_omitted() -> None:
     task = {"robot": {"mvs": {"right_hand": {}}}}
 
     assert resolve_crop_mode(config, task, "right_hand") == "center_square"
+
+
+def test_stats_filter_selects_evenly_spaced_output_frames() -> None:
+    expression, count = stats_filter(5, 3)
+
+    assert expression == "eq(n\\,0)+eq(n\\,2)+eq(n\\,4)"
+    assert count == 3

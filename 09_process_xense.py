@@ -38,6 +38,8 @@ from pipeline_common import source_root
 from pipeline_common import work_root
 from pipeline_common import write_json
 from pipeline_common import write_jsonl
+from video_statistics import RgbStatistics
+from video_statistics import sample_indices
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,43 @@ class XenseSensor:
     @property
     def force_resultant_key(self) -> str:
         return f"observation.xense.{self.name}.force_resultant"
+
+
+class SolverCache:
+    """Keep SDK solvers alive while their runtime configuration is unchanged."""
+
+    def __init__(self, Sensor: Any) -> None:
+        self.Sensor = Sensor
+        self.solvers: dict[tuple[str, str, str, Path], Any] = {}
+
+    @staticmethod
+    def key(asset: Any) -> tuple[str, str, str, Path]:
+        return (asset.runtime_set_id, asset.sensor_name, asset.serial, asset.runtime)
+
+    def get(self, asset: Any) -> Any:
+        key = self.key(asset)
+        solver = self.solvers.get(key)
+        if solver is not None:
+            return solver
+        solver = self.Sensor.createSolver(asset.runtime)
+        if not solver:
+            raise RuntimeError(f"Xense SDK could not create solver from {asset.runtime}")
+        self.solvers[key] = solver
+        return solver
+
+    def release_all(self) -> None:
+        solvers = list(self.solvers.values())
+        self.solvers.clear()
+        errors: list[BaseException] = []
+        for solver in solvers:
+            if not hasattr(solver, "release"):
+                continue
+            try:
+                solver.release()
+            except BaseException as error:
+                errors.append(error)
+        if errors:
+            raise errors[0]
 
 
 def discover_xense_sensors(config: dict[str, Any], source_info: dict[str, Any]) -> list[XenseSensor]:
@@ -281,13 +320,13 @@ def process_sensor_episode(
     depth_path: Path | None,
     fps: float,
     settings: dict[str, Any],
+    stats_sample_indices: set[int] | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, Any], np.ndarray | None]:
     output_names = ["Difference", "Depth", "Force", "ForceResultant"]
     output_types = [getattr(Sensor.OutputType, name) for name in output_names]
     capture = cv2.VideoCapture(str(video))
     if not capture.isOpened():
         raise RuntimeError(f"Could not open Xense Rectify video: {video}")
-    selected = set(selected_indices)
     force_values: list[np.ndarray] = []
     resultant_values: list[np.ndarray] = []
     difference_writer: RawVideoWriter | None = None
@@ -297,6 +336,11 @@ def process_sensor_episode(
         "min": float("inf"), "max": float("-inf"),
         "below_range": 0, "above_range": 0,
     }
+    difference_stats = RgbStatistics()
+    depth_stats = RgbStatistics()
+    if stats_sample_indices is None:
+        stats_sample_indices = set(range(len(selected_indices)))
+    selected_position_by_source = {source_index: position for position, source_index in enumerate(selected_indices)}
     depth_config = settings["depth"]
     depth_range = depth_config.get("range", [0.0, 1.0])
     minimum, maximum = float(depth_range[0]), float(depth_range[1])
@@ -337,10 +381,12 @@ def process_sensor_episode(
                 raise ValueError(
                     f"Unexpected Xense force shapes: Force={force.shape}, ForceResultant={resultant.shape}"
                 )
-            if frame_index not in selected:
+            selected_position = selected_position_by_source.get(frame_index)
+            if selected_position is None:
                 continue
 
             if bool(settings["difference"].get("enabled", True)):
+                difference_rgb = difference[..., ::-1]
                 if difference_writer is None:
                     if difference_path is None:
                         raise RuntimeError("Difference output path is missing")
@@ -351,7 +397,9 @@ def process_sensor_episode(
                         settings["video"],
                         int(settings["difference"].get("crf", 18)),
                     )
-                difference_writer.write(difference[..., ::-1])
+                difference_writer.write(difference_rgb)
+                if selected_position in stats_sample_indices:
+                    difference_stats.update(difference_rgb)
 
             depth_rgb, summary = depth_to_gray_rgb(
                 depth,
@@ -375,6 +423,8 @@ def process_sensor_episode(
                         int(depth_config.get("crf", 0)),
                     )
                 depth_writer.write(depth_rgb)
+                if selected_position in stats_sample_indices:
+                    depth_stats.update(depth_rgb)
 
             if bool(settings["force"].get("parquet", True)) or bool(settings["force"].get("video", False)):
                 force_values.append(force.astype(np.float32, copy=True))
@@ -411,7 +461,12 @@ def process_sensor_episode(
         if len(resultant_values) != expected:
             raise RuntimeError(f"Expected {expected} ForceResultant frames, got {len(resultant_values)}")
         arrays[sensor.force_resultant_key] = np.stack(resultant_values)
-    return arrays, {"shapes": observed_shapes, "depth": depth_summary}, force_array
+    video_stats = {}
+    if bool(settings["difference"].get("enabled", True)):
+        video_stats["difference"] = difference_stats.result()
+    if bool(depth_config.get("enabled", True)):
+        video_stats["depth"] = depth_stats.result()
+    return arrays, {"shapes": observed_shapes, "depth": depth_summary, "video_stats": video_stats}, force_array
 
 
 def write_visualization_assets(
@@ -565,6 +620,7 @@ def main() -> None:
     marker["xense_status"] = "running"
     write_json(marker_path, marker)
     force_cache_root: Path | None = None
+    solver_cache: SolverCache | None = None
 
     try:
         source_info = read_json(source / "meta/info.json")
@@ -576,6 +632,7 @@ def main() -> None:
         runtime_catalog = RuntimeCatalog(source, list(source_episodes.values()))
         trim_by_episode, sparsification_by_episode = load_frame_selection_manifests(config)
         Sensor = load_xense_sensor()
+        solver_cache = SolverCache(Sensor)
         source_chunks = int(source_info.get("chunks_size", 1000))
         output_chunks = int(config["output"].get("chunks_size", 1000))
         fps = float(source_info["fps"])
@@ -599,6 +656,9 @@ def main() -> None:
                 trim_by_episode=trim_by_episode,
                 sparsification_by_episode=sparsification_by_episode,
             )
+            stats_sample_indices = set(sample_indices(
+                len(selected_indices), int(config["metadata"].get("video_stats_frames_per_episode", 32)),
+            ))
             if len(selected_indices) != int(episode["length"]):
                 raise ValueError(
                     f"Episode {episode_index} selects {len(selected_indices)} Xense frames, "
@@ -607,6 +667,7 @@ def main() -> None:
             parquet = episode_path(output, source_info["data_path"], episode_index, output_chunks)
             table = pq.read_table(parquet)
             episode_stats: dict[str, Any] = {}
+            episode_video_stats: dict[str, Any] = {}
             sensor_rows: dict[str, Any] = {}
             for sensor in sensors:
                 asset = runtime_catalog.resolve(source_row, sensor.name, sensor.serial)
@@ -640,26 +701,21 @@ def main() -> None:
                 )
                 difference_temp = difference_path.with_suffix(".tmp.mp4")
                 depth_temp = depth_path.with_suffix(".tmp.mp4")
-                solver = Sensor.createSolver(asset.runtime)
-                if not solver:
-                    raise RuntimeError(f"Xense SDK could not create solver from {asset.runtime}")
-                try:
-                    arrays, details, force_frames = process_sensor_episode(
-                        Sensor=Sensor,
-                        solver=solver,
-                        sensor=sensor,
-                        video=source_video,
-                        episode_index=episode_index,
-                        source_length=source_length,
-                        selected_indices=selected_indices,
-                        difference_path=difference_temp if settings["difference"].get("enabled", True) else None,
-                        depth_path=depth_temp if settings["depth"].get("enabled", True) else None,
-                        fps=fps,
-                        settings=settings,
-                    )
-                finally:
-                    if hasattr(solver, "release"):
-                        solver.release()
+                solver = solver_cache.get(asset)
+                arrays, details, force_frames = process_sensor_episode(
+                    Sensor=Sensor,
+                    solver=solver,
+                    sensor=sensor,
+                    video=source_video,
+                    episode_index=episode_index,
+                    source_length=source_length,
+                    selected_indices=selected_indices,
+                    difference_path=difference_temp if settings["difference"].get("enabled", True) else None,
+                    depth_path=depth_temp if settings["depth"].get("enabled", True) else None,
+                    fps=fps,
+                    settings=settings,
+                    stats_sample_indices=stats_sample_indices,
+                )
                 if settings["difference"].get("enabled", True):
                     difference_temp.replace(difference_path)
                 if settings["depth"].get("enabled", True):
@@ -691,6 +747,10 @@ def main() -> None:
                         )
                     sdk_shapes.setdefault(shape_key, shape)
                 depth_details = details["depth"]
+                if "difference" in details["video_stats"]:
+                    episode_video_stats[sensor.difference_key] = details["video_stats"]["difference"]
+                if "depth" in details["video_stats"]:
+                    episode_video_stats[sensor.depth_key] = details["video_stats"]["depth"]
                 clipped = int(depth_details["below_range"]) + int(depth_details["above_range"])
                 if clipped:
                     print(
@@ -731,6 +791,8 @@ def main() -> None:
                         "cache": force_cache,
                         "path": force_video_path,
                         "manifest": sensor_row,
+                        "video_stats": episode_video_stats,
+                        "stats_sample_indices": stats_sample_indices,
                     })
             table = update_huggingface_metadata(
                 table,
@@ -746,6 +808,7 @@ def main() -> None:
                 "selected_source_frame_indices": selected_indices,
                 "sensors": sensor_rows,
                 "stats": episode_stats,
+                "video_stats": episode_video_stats,
             })
             print(
                 f"[{ordinal}/{len(episodes)}] Xense episode {episode_index:06d}: "
@@ -784,8 +847,12 @@ def main() -> None:
                 )
                 try:
                     cached = np.load(job["cache"], mmap_mode="r", allow_pickle=False)
-                    for force_frame in cached:
-                        writer.write(pad_force_rgb(force_to_rgb(force_frame, minimum, maximum)))
+                    statistics = RgbStatistics()
+                    for frame_index, force_frame in enumerate(cached):
+                        rgb = pad_force_rgb(force_to_rgb(force_frame, minimum, maximum))
+                        writer.write(rgb)
+                        if frame_index in job["stats_sample_indices"]:
+                            statistics.update(rgb)
                     writer.close()
                 except BaseException:
                     writer.abort()
@@ -793,6 +860,7 @@ def main() -> None:
                 force_video_temp.replace(force_video_path)
                 job["manifest"]["force_video"] = str(force_video_path.relative_to(output))
                 job["manifest"]["force_video_bytes"] = force_video_path.stat().st_size
+                job["video_stats"][sensor.force_video_key] = statistics.result()
                 print(
                     f"[Xense Force video {force_ordinal}/{len(force_jobs)}] "
                     f"{sensor.name}: {len(cached)} frames -> {force_video_path.relative_to(output)}",
@@ -825,8 +893,12 @@ def main() -> None:
         write_json(marker_path, marker)
         raise
     finally:
-        if force_cache_root is not None:
-            shutil.rmtree(force_cache_root, ignore_errors=True)
+        try:
+            if solver_cache is not None:
+                solver_cache.release_all()
+        finally:
+            if force_cache_root is not None:
+                shutil.rmtree(force_cache_root, ignore_errors=True)
 
 
 if __name__ == "__main__":

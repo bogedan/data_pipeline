@@ -130,7 +130,7 @@ xense:
 
 metadata:
   # Image statistics are sampled only for metadata; OpenPI does not normalize images with these values.
-  video_stats_frames_per_episode: 100
+  video_stats_frames_per_episode: 32
 
 visualization:
   # Rerun uses metric radii. Keep points smaller than the 1 mm sampling spacing.

@@ -5,20 +5,31 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 config_path="${1:-${script_dir}/config.yaml}"
 python_bin="${DATA_PIPELINE_PYTHON:-python}"
 
+log() {
+  printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*"
+}
+
+timestamp_stream() {
+  local line
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    log "${line}"
+  done
+}
+
 if [[ ! -f "${config_path}" ]]; then
-  echo "Config file not found: ${config_path}" >&2
-  echo "Usage: $0 [config.yaml]" >&2
+  log "Config file not found: ${config_path}" >&2
+  log "Usage: $0 [config.yaml]" >&2
   exit 2
 fi
 config_path="$(realpath "${config_path}")"
 
 if ! command -v "${python_bin}" >/dev/null 2>&1; then
-  echo "Python interpreter not found: ${python_bin}" >&2
-  echo "Activate the project environment or set DATA_PIPELINE_PYTHON=/path/to/python." >&2
+  log "Python interpreter not found: ${python_bin}" >&2
+  log "Activate the project environment or set DATA_PIPELINE_PYTHON=/path/to/python." >&2
   exit 2
 fi
 
-echo "Python: $(command -v "${python_bin}")"
+log "Python: $(command -v "${python_bin}")"
 cd "${script_dir}"
 
 stages=(
@@ -37,10 +48,8 @@ stages=(
 )
 
 for stage in "${stages[@]}"; do
-  echo
-  echo "==> Running ${stage}"
-  "${python_bin}" -u "${stage}" --config "${config_path}"
+  log "==> Running ${stage}"
+  "${python_bin}" -u "${stage}" --config "${config_path}" 2>&1 | timestamp_stream
 done
 
-echo
-echo "Data pipeline completed successfully."
+log "Data pipeline completed successfully."

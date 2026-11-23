@@ -3,9 +3,6 @@ from __future__ import annotations
 
 import argparse
 
-import cv2
-import numpy as np
-
 from pipeline_common import PIPELINE_MARKER
 from pipeline_common import episode_path
 from pipeline_common import load_config
@@ -19,54 +16,6 @@ from pipeline_common import source_root
 from pipeline_common import work_root
 from pipeline_common import write_json
 from pipeline_common import write_jsonl
-
-
-def sample_video_stats(path, requested_frames: int) -> dict[str, list]:
-    capture = cv2.VideoCapture(str(path))
-    if not capture.isOpened():
-        raise RuntimeError(f"Could not open video: {path}")
-    frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-    if frame_count <= 0:
-        capture.release()
-        raise RuntimeError(f"Video contains no readable frames: {path}")
-    sample_count = min(max(requested_frames, 1), frame_count)
-    indices = set(np.linspace(0, frame_count - 1, sample_count, dtype=np.int64).tolist())
-    minimum = np.full(3, np.inf, dtype=np.float64)
-    maximum = np.full(3, -np.inf, dtype=np.float64)
-    total = np.zeros(3, dtype=np.float64)
-    total_square = np.zeros(3, dtype=np.float64)
-    pixel_count = 0
-    sampled = 0
-    index = 0
-    while True:
-        ok, frame = capture.read()
-        if not ok:
-            break
-        if index in indices:
-            rgb = frame[..., ::-1].astype(np.float64) / 255.0
-            flat = rgb.reshape(-1, 3)
-            minimum = np.minimum(minimum, np.min(flat, axis=0))
-            maximum = np.maximum(maximum, np.max(flat, axis=0))
-            total += np.sum(flat, axis=0)
-            total_square += np.sum(flat * flat, axis=0)
-            pixel_count += len(flat)
-            sampled += 1
-        index += 1
-    capture.release()
-    if sampled != sample_count:
-        raise RuntimeError(f"Expected {sample_count} sampled frames from {path}, decoded {sampled}")
-    mean = total / pixel_count
-    std = np.sqrt(np.maximum(total_square / pixel_count - mean * mean, 0.0))
-    def wrap(values: np.ndarray) -> list[list[list[float]]]:
-        return [[[float(value)]] for value in values]
-
-    return {
-        "min": wrap(minimum),
-        "max": wrap(maximum),
-        "mean": wrap(mean),
-        "std": wrap(std),
-        "count": [sampled],
-    }
 
 
 def main() -> None:
@@ -121,7 +70,10 @@ def main() -> None:
     partial = {row["episode_index"]: row for row in read_jsonl(partial_path)}
     layouts = resolve_arm_layouts(config, source_info)
     chunks_size = int(config["output"].get("chunks_size", 1000))
-    sample_frames = int(config["metadata"].get("video_stats_frames_per_episode", 100))
+    main_video_stats_path = work / "08_video_stats.jsonl"
+    if not main_video_stats_path.is_file():
+        raise SystemExit("Metadata finalization requires 08_convert_videos.py video statistics")
+    main_video_stats = {int(row["episode_index"]): row["video_stats"] for row in read_jsonl(main_video_stats_path)}
 
     episode_stats = []
     for number, episode in enumerate(episodes, start=1):
@@ -131,9 +83,12 @@ def main() -> None:
             video_path = episode_path(
                 output, source_info["video_path"], episode_index, chunks_size, video_key=layout.output_video_key
             )
-            if not video_path.exists():
+            if not video_path.is_file():
                 raise SystemExit(f"Missing {video_path}; 08_convert_videos.py did not complete successfully")
-            stats[layout.output_video_key] = sample_video_stats(video_path, sample_frames)
+            try:
+                stats[layout.output_video_key] = main_video_stats[episode_index][layout.output_video_key]
+            except KeyError as error:
+                raise SystemExit(f"Missing stage 08 video statistics for episode {episode_index} {layout.output_video_key}") from error
         if xense_enabled:
             if episode_index not in xense_manifest:
                 raise ValueError(f"Xense manifest has no entry for episode {episode_index}")
@@ -143,28 +98,22 @@ def main() -> None:
                 name = sensor["name"]
                 if bool(config["xense"]["difference"].get("enabled", True)):
                     key = f"observation.images.xense_{name}_difference"
-                    path = episode_path(
-                        output, source_info["video_path"], episode_index, chunks_size, video_key=key
-                    )
+                    path = episode_path(output, source_info["video_path"], episode_index, chunks_size, video_key=key)
                     if not path.is_file():
                         raise SystemExit(f"Missing {path}; 09_process_xense.py did not complete successfully")
-                    stats[key] = sample_video_stats(path, sample_frames)
+                    stats[key] = xense_row["video_stats"][key]
                 if bool(config["xense"]["depth"].get("enabled", True)):
                     key = f"observation.images.xense_{name}_depth"
-                    path = episode_path(
-                        output, source_info["video_path"], episode_index, chunks_size, video_key=key
-                    )
+                    path = episode_path(output, source_info["video_path"], episode_index, chunks_size, video_key=key)
                     if not path.is_file():
                         raise SystemExit(f"Missing {path}; 09_process_xense.py did not complete successfully")
-                    stats[key] = sample_video_stats(path, sample_frames)
+                    stats[key] = xense_row["video_stats"][key]
                 if bool(config["xense"]["force"].get("video", False)):
                     key = f"observation.images.xense_{name}_force"
-                    path = episode_path(
-                        output, source_info["video_path"], episode_index, chunks_size, video_key=key
-                    )
+                    path = episode_path(output, source_info["video_path"], episode_index, chunks_size, video_key=key)
                     if not path.is_file():
                         raise SystemExit(f"Missing {path}; 09_process_xense.py did not complete successfully")
-                    stats[key] = sample_video_stats(path, sample_frames)
+                    stats[key] = xense_row["video_stats"][key]
         episode_stats.append({"episode_index": episode_index, "stats": stats})
         print(f"[{number}/{len(episodes)}] metadata episode {episode_index:06d}")
     write_jsonl(output / "meta/episodes_stats.jsonl", episode_stats)

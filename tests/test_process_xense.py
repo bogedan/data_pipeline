@@ -12,6 +12,75 @@ MODULE = importlib.import_module("09_process_xense")
 VALIDATE = importlib.import_module("validate_openpi")
 
 
+class FakeSolver:
+    def __init__(self) -> None:
+        self.release_count = 0
+
+    def release(self) -> None:
+        self.release_count += 1
+
+
+def test_solver_cache_reuses_matching_runtime_asset_and_releases_once(tmp_path: Path) -> None:
+    first = SimpleNamespace(
+        runtime_set_id="xrs_" + "1" * 32,
+        sensor_name="left",
+        serial="OG000001",
+        runtime=tmp_path / "left.runtime",
+    )
+    same = SimpleNamespace(**vars(first))
+    created: list[FakeSolver] = []
+
+    class Sensor:
+        @staticmethod
+        def createSolver(_runtime: Path) -> FakeSolver:
+            solver = FakeSolver()
+            created.append(solver)
+            return solver
+
+    cache = MODULE.SolverCache(Sensor)
+
+    assert cache.get(first) is cache.get(same)
+    assert len(created) == 1
+    cache.release_all()
+    cache.release_all()
+    assert created[0].release_count == 1
+
+
+def test_solver_cache_separates_runtime_sets_and_does_not_cache_creation_failure(tmp_path: Path) -> None:
+    first = SimpleNamespace(
+        runtime_set_id="xrs_" + "1" * 32,
+        sensor_name="left",
+        serial="OG000001",
+        runtime=tmp_path / "first.runtime",
+    )
+    second = SimpleNamespace(
+        runtime_set_id="xrs_" + "2" * 32,
+        sensor_name="left",
+        serial="OG000001",
+        runtime=tmp_path / "second.runtime",
+    )
+    attempts = 0
+
+    class Sensor:
+        @staticmethod
+        def createSolver(_runtime: Path) -> FakeSolver | None:
+            nonlocal attempts
+            attempts += 1
+            return None if attempts == 1 else FakeSolver()
+
+    cache = MODULE.SolverCache(Sensor)
+
+    with pytest.raises(RuntimeError, match="could not create solver"):
+        cache.get(first)
+    first_solver = cache.get(first)
+    second_solver = cache.get(second)
+    assert attempts == 3
+    assert first_solver is not second_solver
+    cache.release_all()
+    assert first_solver.release_count == 1
+    assert second_solver.release_count == 1
+
+
 def test_depth_to_gray_rgb_uses_fixed_unorm8_mapping() -> None:
     depth = np.asarray([[0.0, 0.5, 1.0]], dtype=np.float32)
 
@@ -224,6 +293,7 @@ def test_process_sensor_feeds_all_frames_and_emits_only_selected(
         depth_path=tmp_path / "depth.mp4",
         fps=30,
         settings=settings,
+        stats_sample_indices={1},
     )
 
     assert solver.inputs == [0, 1, 2, 3, 4]
@@ -240,3 +310,6 @@ def test_process_sensor_feeds_all_frames_and_emits_only_selected(
     np.testing.assert_array_equal(arrays[sensor.force_resultant_key][:, 0], [1, 4])
     assert details["depth"]["min"] == pytest.approx(0.1)
     assert details["depth"]["max"] == pytest.approx(0.4)
+    assert set(details["video_stats"]) == {"difference", "depth"}
+    assert details["video_stats"]["difference"]["count"] == [1]
+    assert details["video_stats"]["depth"]["count"] == [1]

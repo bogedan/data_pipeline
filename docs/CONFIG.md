@@ -318,10 +318,10 @@ Force 的 `parquet` 和 `video` 可分别开关。视频在整个输出数据集
 
 ```yaml
 metadata:
-  video_stats_frames_per_episode: 100
+  video_stats_frames_per_episode: 32
 ```
 
-`video_stats_frames_per_episode` 控制 `10` 每个视频用于估计图像统计量的采样帧数，不改变视频内容。
+`video_stats_frames_per_episode` 控制 `08` 主视频和 `09` Xense 视频在每个 episode 中等距采样的统计帧数。`08` 和 `09` 在生成视频时写入统计，`10` 只读取并汇总统计，不再解码视频。
 
 ## visualization
 

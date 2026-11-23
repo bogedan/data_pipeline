@@ -24,6 +24,8 @@ DATA_PIPELINE_PYTHON=/path/to/python ./run_data_pipeline.sh /path/to/config.yaml
 
 不设置 `DATA_PIPELINE_PYTHON` 时使用当前环境中的 `python`。
 
+所有通过该命令执行的阶段输出都会以 `[YYYY-MM-DD HH:MM:SS]` 为前缀；重定向到文件、Web 日志和批量处理日志会保留相同时间戳。
+
 ## 执行顺序
 
 ```text
