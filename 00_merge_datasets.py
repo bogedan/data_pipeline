@@ -227,6 +227,37 @@ def compatible_info(info: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in info.items() if key not in ignored}
 
 
+def info_differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
+    def walk(path: str, left: Any, right: Any) -> list[str]:
+        if isinstance(left, dict) and isinstance(right, dict):
+            differences: list[str] = []
+            for key in sorted(left.keys() | right.keys()):
+                child = f"{path}.{key}" if path else key
+                if key not in left:
+                    differences.append(f"{child}: missing from first dataset")
+                elif key not in right:
+                    differences.append(f"{child}: missing from this dataset")
+                else:
+                    differences.extend(walk(child, left[key], right[key]))
+            return differences
+        if isinstance(left, list) and isinstance(right, list):
+            differences = []
+            for index in range(max(len(left), len(right))):
+                child = f"{path}[{index}]"
+                if index >= len(left):
+                    differences.append(f"{child}: missing from first dataset")
+                elif index >= len(right):
+                    differences.append(f"{child}: missing from this dataset")
+                else:
+                    differences.extend(walk(child, left[index], right[index]))
+            return differences
+        if left != right:
+            return [f"{path}: first={left!r}, this={right!r}"]
+        return []
+
+    return walk("", compatible_info(reference), compatible_info(candidate))
+
+
 def scalar_stats(values: np.ndarray) -> dict[str, list[Any]]:
     values = np.asarray(values)
     return {
@@ -371,8 +402,10 @@ def merge_datasets(inputs: list[Path], output: Path, *, overwrite: bool = False)
     base_tasks = read_jsonl(inputs[0] / "meta/tasks.jsonl")
     base_assets = asset_manifest(inputs[0])
     for source, (info, _, _) in zip(inputs[1:], validated[1:]):
-        if compatible_info(info) != compatible_info(base_info):
-            raise ValueError(f"Dataset metadata/schema is incompatible: {source}")
+        differences = info_differences(base_info, info)
+        if differences:
+            details = "\n  - ".join(differences)
+            raise ValueError(f"Dataset metadata/schema is incompatible: {source}\n  - {details}")
         if read_jsonl(source / "meta/tasks.jsonl") != base_tasks:
             raise ValueError(f"Task metadata is incompatible: {source}")
         if asset_manifest(source) != base_assets:

@@ -24,7 +24,8 @@ python 00_merge_datasets.py \
 ## 输入要求
 
 - 至少两个 LeRobot v2.1 数据集。
-- 任务 metadata、特征 schema、视频键和归档 `assets` 必须一致；数据衍生的 `*.rrd` 不参与兼容性检查。
+- 任务 metadata、特征 schema、视频键和归档 `assets` 必须一致；特征中的相机/机器人/夹爪序列号也属于 schema，不能仅因画面尺寸相同就视为可互换。数据衍生的 `*.rrd` 不参与兼容性检查。
+- schema 不兼容时，错误信息会列出 `meta/info.json` 中不一致的字段。若设备序列号不同，应先明确并统一各设备的语义映射，再合并。
 - 每个 episode 的 parquet 行数、`frame_index` 和 metadata 必须匹配。
 - 自动发现模式只接受 `<dataset_name>_<date>_HHMMSS`。
 
